@@ -12,6 +12,10 @@ import cv2
 from sklearn.utils import shuffle
 import glob
 from PIL import Image
+import time
+import inflect
+import requests
+import json
 
 #url open to get image
 import urllib.request
@@ -21,14 +25,7 @@ from urllib.request import urlopen
 import imgaug as ia
 from imgaug import augmenters as iaa
 
-#in case you have images without need to do other specific preprocessing (i.e. not put black partout) you can simply use:
-'''test_datagen = ImageDataGenerator(rescale=1. / 255)
 
-train_generator = train_datagen.flow_from_directory(
-    train_data_dir,
-    target_size=(img_width, img_height),
-    batch_size=batch_size,
-    class_mode='binary') ... '''
 
 ###################################################################################################
 ###################################### download data from www #####################################
@@ -42,27 +39,92 @@ def get_image(url, path, name):
         #download until get image or until 10 trials of same image
         while k<10:
             try:
+                response = None
                 response = urlopen(url)
                 img = Image.open(response)
                 img.save(path)
                 k = 10
+                del img
             except KeyboardInterrupt:
                     raise
             except Exception as e:
-                if response.getcode() in [200, 404]: 
-                    print('Not able to SAVE image for species %s and url %s, \
-                    due to: %s ,  lets STOP'%(name,str(url),e))
-                    print(response.getcode())
-                    k = 10
-                else:
-                    print('Not able to SAVE image for species %s and url %s, \
-                    due to: %s ,  lets RETRY'%(name,str(url),e))
-                    print(response.getcode())
-                    k = k+1 #typical example: "HTTP Error 504: Gateway Time-out"
-                    time.sleep(5)
+                if response is not None:
+                    if response.getcode() in [200, 404]: 
+                        print('Not able to SAVE image for species %s and url %s, lets STOP due to: \n %s'%(name,str(url),e))
+                        print(response.getcode())
+                        k = 10
+                    else:
+                        print('Not able to SAVE image for species %s and url %s, lets RETRY due to: \n %s'%(name,str(url),e))
+                        print(response.getcode())
+                        k = k+1 
+                        time.sleep(5)
+                else: 
+                        print('Not able to SAVE image for species %s and url %s, lets STOP due to: \n %s'%(name,str(url),e))
+                        k = 10  #HTTP Error 404: Not Found
 
+                        
+#search wikipedia translation of the title
+#more parameter at: https://www.mediawiki.org/w/api.php?action=help&modules=query%2Blanglinks
+def search_wikipedia_laguage(text, language='en'):
+    #wiki query with properties 'langlinks' to ask for all opssible language translation given on that page with limit to 500 language
+    #(default is 10, 500 is maximum)
+    url = 'https://'+language+'.wikipedia.org/w/api.php?action=query&format=json&prop=langlinks&lllimit=500&llprop=langname|autonym&titles=%s&redirects=1'% requests.utils.quote(text)
+    while True:
+        try:
+            #call API
+            content = requests.get(url).content
+            content = json.loads(content)
+            #content[1][0].upper()==text.upper(): #if exact match in the title
+            return(content)
+        except KeyError:
+            print('species %s failed, try again' % text)
+#for more general info (sentences, url ...)
+#url = 'https://'+language+'.wikipedia.org/w/api.php?action=opensearch&search=%s&limit=1&namespace=0&format=json&redirects=resolve&prop=langlinks' % requests.utils.quote(text)
+#note that we have put 'limit=1' as we are searching for the exact amtch (car pour le reste on va faire avec d'autre
+#technique comme la distance entre le smots etc)
+#to search wiki sumamry: wikipedia.summary(x)
 
-                    
+    
+#used for allrecipes.com for example    
+# Get HTML content if not already existing in our files (not to request it two times)
+def get(id, url, path_):
+    # Check if file html was already dowloaded
+    cache_path = os.path.join(path_, 'cache')
+    path = os.path.join(cache_path, '%d.html' % id)
+    if os.path.exists(path):
+        with open(path, 'rb') as file:
+            content = file.read()
+    # Otherwise get page content
+    else:
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+        while True:
+            try:
+            # Write cache
+                with open(path, 'wb') as file:
+                    page = requests.get(url+str(id), timeout=5)
+                    content = page.content
+                    file.write(content)
+                break
+            except KeyboardInterrupt:
+                raise
+            except:
+                print('page %d failed, try again' % id)
+    return content
+
+def parse(content,end_of_title,encoding='utf-8'):
+    # Check if page is valid
+    try:
+        tree = html.fromstring(content.decode(encoding))
+        title = tree.xpath('head/title')[0].text
+        if not title.endswith(end_of_title):
+            return None
+    except :
+        print('error')
+        tree=None
+    return tree    
+    
+    
 ###################################################################################################
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
@@ -227,6 +289,15 @@ def image_augmentation_with_maskrcnn(ID, n1, n2, image_path, mask_path, augmenta
 ########################################## datagenerator ##########################################
 ###################################################################################################
 
+#in case you have images without need to do other specific preprocessing (i.e. not put black partout) you can simply use:
+'''test_datagen = ImageDataGenerator(rescale=1. / 255)
+
+train_generator = train_datagen.flow_from_directory(
+    train_data_dir,
+    target_size=(img_width, img_height),
+    batch_size=batch_size,
+    class_mode='binary') ... '''
+
 #copy from internet then small modifications
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
@@ -297,5 +368,89 @@ class DataGenerator(keras.utils.Sequence):
             return X, keras.utils.to_categorical(y, num_classes=self.n_classes)
     
     
+###################################################################################################
+########################################### other - old ###########################################
+###################################################################################################
     
-    
+#join several dico together without duplicate info but with all possible info
+def join_dico(li_s):
+    l = len(li_s)
+    if l==1:
+        return(li_s[0])
+    else:
+        s1 = li_s[0]
+        s2 = li_s[1]
+        s = s1.copy()
+        for k,v in s2.items():
+            if k in s:
+                s[k] = s[k] + ' /-/ ' + s2[k]
+                s[k] = ' /-/ '.join(list(set([i.strip() for i in s[k].split('/-/')])))
+            else:
+                s[k] = s2[k]
+        r = li_s[2:]
+        if len(r)>0:
+            return(join_dico(li_s = r+[s]))
+        else:
+            return(s)
+#small example 
+#s1 = {'parent':'afdsf','a':'12'}
+#s2 = {'a':'sdfsdf /-/ df /-/12','cac':'q'}
+#s3 = {'a':'sdfsdf1213'}
+#s4 = {'hello':'new'}
+#join_dico([s1,s2,s3,s4]) 
+
+
+#take two strings as input. rule pour enlever les pluriels/singulier: guarder celui qui permettra de retrouver l'autre (car pas forcément le cas
+#dans les deux sens) ou alors garder celui qui est ordonner alphabetiquement le premier (si les deux peuvent induire l'autre)
+#example d'utilisation: si initialement dans notre liste d'ingredient il y a une forme qui ne permet pas de retourner 
+#à son autre form, alors il faudra l'updater avec l'autre
+engine = inflect.engine()
+def keep_goodone_singplu(x1,x2):
+    x1_s = engine.plural(x1)
+    x2_s = engine.plural(x2)
+    if (x1_s==x2) and (x2_s==x1):
+        return([sorted([x1,x2])[0]])
+    elif (x1_s==x2):
+        return([x1])
+    elif (x2_s==x1):
+        return([x2])
+    else:
+        return([x1,x2])
+#e.g.
+#keep_goodone_singplu('pie cakes','pie cake')
+#the plural are: pie cakess, pie cakes -->'pie cake'
+
+
+#output a itertools of tuples of all possible combinations of 2 elements form the list 'li'
+def all_subsets(li):
+    return chain(*map(lambda x: combinations(li, x), range(2, 3)))
+#for subset in all_subsets([1,3,5]):
+#    print(subset)
+#-->:
+#(1, 3)
+#(1, 5)
+#(3, 5)
+
+
+#It simply says that a tree is a dict whose default values are trees.
+def tree(): return defaultdict(tree)
+#from tree to dict
+def dicts(t): return {k: dicts(t[k]) for k in t}
+#iteration
+def add(t, path):
+    for node in path:
+        t = t[node]
+        
+        
+#put the values of all keys except the one in li_ke together (they should be list) (used in below fct)
+def all_except_keys(dico,li_ke):
+    r = []
+    dico_ = dico.copy()
+    for k in li_ke:
+        dico_.pop(k,None)
+    r = list(dico_.values())
+    r = [i for sublist in r for i in sublist]
+    return(set(r))        
+        
+        
+        
