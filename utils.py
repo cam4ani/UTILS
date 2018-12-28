@@ -16,6 +16,20 @@ import time
 import inflect
 import requests
 import json
+import random
+import sys
+from operator import itemgetter
+import tqdm
+import re
+#to match substring in string
+import fuzzysearch
+from fuzzysearch import find_near_matches
+
+#parallel computing
+from multiprocessing import Pool
+
+#structured data from text
+from pdf2image import convert_from_path
 
 #url open to get image
 import urllib.request
@@ -25,7 +39,15 @@ from urllib.request import urlopen
 import imgaug as ia
 from imgaug import augmenters as iaa
 
+#videos
+import imageio
+from skimage import color
+import scipy.misc
 
+#plot
+import matplotlib.cm as cm
+from matplotlib import pyplot as plt
+import matplotlib.patches as patches
 
 ###################################################################################################
 ###################################### download data from www #####################################
@@ -60,7 +82,7 @@ def get_image(url, path, name):
                         time.sleep(5)
                 else: 
                         print('Not able to SAVE image for species %s and url %s, lets STOP due to: \n %s'%(name,str(url),e))
-                        k = 10  #HTTP Error 404: Not Found
+                        k = 10  #e.g. HTTP Error 404: Not Found
 
                         
 #search wikipedia translation of the title
@@ -125,10 +147,139 @@ def parse(content,end_of_title,encoding='utf-8'):
     return tree    
     
     
+    
+###################################################################################################
+#################################### structured data from text ####################################
+###################################################################################################
+
+#take as input an image ( np.array or PIL image)
+def frompng2images(img, path, page_id=0, plot_=0):
+    
+    #convert to numpy if its not
+    if type(img) is not np.ndarray:
+        img = np.asarray(img)
+    
+    #some operation will directly impact the input image, so we must keep a copy of it
+    imCopy = img.copy()
+    
+    ### convert to grayscale ###
+    imgray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+    
+    ### find contour ###
+    #for better accuracy we use binary images before finding contours, applying threshold: 
+    #if pixel is above 200 (first value, reducing to 160 may lead to to much images) we assign 255 (second value), 
+    #below we assign 0 (third value).
+    ret,thresh = cv2.threshold(imgray,200,255,0)
+    image, contours, hierarchy =  cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+    
+    #create a list of rectangle which may correspond to an image
+    li_bbox = []
+    for contour in contours:
+        poly = cv2.approxPolyDP(contour, 0.01 * cv2.arcLength(contour, False), False)
+        x, y, w, h = cv2.boundingRect(poly)
+        #remove if its really small compared to initial (i.e. smaller than 10%) image or equal to the initial image (or half the page
+        #in case the book was scanned two pages at a time (horizontally or vertically))
+        hi, wi, ci = imCopy.shape
+        #avoid: not to smalle image (bad quality or can even be logo etc)
+        #avoid: equal to the hole page
+        #avoid: equal to half page when scanned with two page on the width
+        #avoid: equal to half page when scanned with two page on the height
+        if (h>(hi*0.1)) & (w>(wi*0.1)) & \
+        ((h<(hi*0.95))|(w<(wi*0.95))) & \
+        ((h<(hi*0.95))|(w>(wi*0.55))|((wi*0.45)>w)) & \
+        ((w<(wi*0.95))|(h>(hi*0.55))|((hi*0.45)>h)):
+            li_bbox.append((x,y,w,h))
+    
+    #remove images included in another image
+    li_bbox = remove_embedded_bbox(li_bbox)
+    
+    if plot_==1:
+        for bbox in li_bbox:
+            x,y,w,h = bbox
+            # Create figure and axes
+            fig,ax = plt.subplots(1)
+            # Display the image
+            ax.imshow(imCopy)
+            # Create a Rectangle patch
+            rect = patches.Rectangle((x,y),w,h,linewidth=1,edgecolor='r',facecolor='none')
+            # Add the patch to the Axes
+            ax.add_patch(rect)
+            plt.show()
+    
+    #create directory if not existing
+    if not os.path.exists(path):
+        os.makedirs(path)
+    
+    #save
+    for image_id,bbox in enumerate(li_bbox):
+        x,y,w,h = bbox
+        img_to_save = Image.fromarray(imCopy[y:y+h,x:x+w])
+        img_to_save.save(os.path.join(path,'p'+str(page_id)+'_i'+str(image_id)+'.png'))  
+        del img_to_save
+      
+    #TODO: verify if useful:
+    del img
+    del imCopy
+    del imgray
+        
+        
+def from_path_scannpdf_book_2image(path, path_save, nbrp=2, plot_=0):
+    pages = convert_from_path(path)
+    print('There is %d pages in the book'%len(pages))
+    for i,page in enumerate(pages):
+        frompng2images(img=page, path=path_save, page_id=i, plot_=plot_)    
+    del pages
+    
 ###################################################################################################
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
+#remove from alist of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
+#note that the (0,0) point in an image is up left.
+def remove_embedded_bbox(li_bbox, plot_bbox=0):
+    
+    #sort (smaller to bigger) list of rectangles by the highest height (to make things more efficient)
+    li_bbox = sorted(li_bbox,key=itemgetter(3))
+    
+    #initialize list of rectangle to return
+    li_bbox_r = li_bbox.copy()
+    
+    #remove all rectangle when its included in another one. Hence we will compare each rectangle with the one having
+    #a higher height only (for efficiency). as soon as we see that the rectangle is included in another one we will remove it and pass 
+    #to the next one
+    for i,bbox in enumerate(li_bbox):
+        for bbox2 in li_bbox[i+1:]:
+            x1, y1, w1, h1 =  bbox
+            x2, y2, w2, h2 =  bbox2
+            if (w1<w2) & (x1>x2) & (y1>y2) & (x1+w1<x2+w2) & (y1+h1<y2+h2):
+                li_bbox_r.remove(bbox)
+
+                #plot (to debug)
+                if plot_bbox==1:
+                    #print(x1, y1, w1, h1)
+                    #print('is included in :')
+                    #print(x2, y2, w2, h2)
+                    # Create figure and axes
+                    fig,ax = plt.subplots(1)
+                    # Display the image
+                    ax.imshow(np.zeros(shape=(max(y1+h1,y2+h2)+50,max(x1+w1,x2+w2)+50)))
+                    # Create a Rectangle patch
+                    rect = patches.Rectangle((x1,y1),w1,h1,linewidth=1,edgecolor='r',facecolor='none')
+                    # Add the patch to the Axes
+                    ax.add_patch(rect)
+
+                    rect = patches.Rectangle((x2,y2),w2,h2,linewidth=1,edgecolor='r',facecolor='none')
+                    # Add the patch to the Axes
+                    ax.add_patch(rect)
+                    plt.show()
+                break
+    return(li_bbox_r)
+#small test for embeded images
+#li_bbox = [(1281, 79, 933, 1425), (1557, 600, 282, 396)]
+#remove_embedded_bbox(li_bbox,plot_bbox=1)
+
+
+#take an image and return the image withou reflect
 def data_augmentation_remove_reflect(img):
     '''r: Radius of a circular neighborhood of each point inpainted that is considered by the algorithm.'''
     #convert it to grayscale
@@ -142,7 +293,7 @@ def data_augmentation_remove_reflect(img):
     #non-zero pixels corresponds to the area which is to be inpainted.
     #Radius of a circular neighborhood of each point inpainted that is considered by the algorithm. : 3
     result = cv2.inpaint(img,mask_,5,cv2.INPAINT_TELEA)
-    return result
+    return(result)
 
 #from an image and mask, keep only the part of the image that intersect with the mask
 def KeepMaskOnly(image, mask, debug_text):
@@ -164,7 +315,7 @@ def remove_shape_keep_all_info(img):
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
     mask_ = cv2.dilate(mask_, kernel, iterations=4)
     result = cv2.inpaint(img,mask_,5,cv2.INPAINT_TELEA) #,cv2.INPAINT_TELEA, INPAINT_NS
-    return (result)
+    return(result)
 
 
 #resize the image regarding either width or height, keeping ratio
@@ -285,6 +436,42 @@ def image_augmentation_with_maskrcnn(ID, n1, n2, image_path, mask_path, augmenta
     return(image)
 
 
+#for maskrcnn
+#function that from mask output of the mask-RCNN model give the VGG mask anotation: all_points_x, all_points_y
+def convert_binary_mask_to_VGG_polygons(R):
+    l, c = R.shape[0:2]
+    R = R.astype(np.uint8)
+    R.resize([l, c])
+    fortran_R = np.asfortranarray(R)
+    encoded_ground_truth = mask.encode(fortran_R)
+    ground_truth_area = mask.area(encoded_ground_truth)
+    ground_truth_bounding_box = mask.toBbox(encoded_ground_truth)
+    contours = measure.find_contours(R, 0.5)
+    #we keep additional info in case its needed once
+    annotation = {
+            "segmentation": [],
+            "area": ground_truth_area.tolist(),
+            "iscrowd": 0,
+            "image_id": 123,
+            "bbox": ground_truth_bounding_box.tolist(),
+            "category_id": 1,
+            "id": 1
+        }
+
+    for contour in contours:
+        contour = np.flip(contour, axis=1)
+        segmentation = contour.ravel().tolist()
+        annotation["segmentation"].append(segmentation)
+
+    T = annotation
+    all_points_x = [T['segmentation'][0][j] for j in range(len(T['segmentation'][0])) if j%2==0] #all even numbers
+    all_points_y = [T['segmentation'][0][j] for j in range(len(T['segmentation'][0])) if j%2!=0] #all odd numbers
+    return(all_points_x, all_points_y)
+
+
+#all_points_x, all_points_y = convert_binary_mask_to_VGG_polygons(r['masks'])
+
+
 ###################################################################################################
 ########################################## datagenerator ##########################################
 ###################################################################################################
@@ -298,7 +485,7 @@ train_generator = train_datagen.flow_from_directory(
     batch_size=batch_size,
     class_mode='binary') ... '''
 
-#copy from internet then small modifications
+#to generate images for your model, you should have 
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(self, list_IDs, labels, image_path, mask_path, batch_size, n_rows, n_cols, n_channels, n_classes, 
@@ -451,6 +638,226 @@ def all_except_keys(dico,li_ke):
     r = list(dico_.values())
     r = [i for sublist in r for i in sublist]
     return(set(r))        
+
+
+#from a string x withoutwhitespace, and a list of whitespace index, it return the string wiht the adequate whitespace
+def from_string_without_whitespace_to_string_withwithespace(x, li_index):
+    initial_length = len(x)+len(li_index)
+    for i in range(initial_length):
+        if i in li_index:
+            x = x[0:i] + ' ' + x[i:]
+    return(x)
+#small example
+#x = 'ab asd whfjzf gdzf  fuj'
+#x_ = ''.join(x.split(' '))
+#li_index = [m.start() for m in re.finditer(' ', x)]
+#from_string_without_whitespace_to_string_withwithespace(x_, li_index)
+
+
+#given a list of text without any whitespace and a list of whitespace index corresponding to its original whitespace
+#places, it will outputa list with whitespace at the coret places (not at end or begning of entries if their was any)
+def from_string_without_whitespace_to_string_withwithespace(li_x, li_index):
+    
+    #removing space at end and begining
+    li_x = [x.strip() for x in li_x]
+    
+    #initialisation
+    x = ''.join(li_x)
+    li_x_r = []
+    initial_length = len(x)+len(li_index)
+    li_split_index = [len(x) for x in li_x]
+    li_split_index = [sum(li_split_index[0:i])-1 for i in range(1,len(li_split_index))]
+    last_split_index = -1
+    
+    #pass through each index
+    for i in tqdm.tqdm(range(initial_length)):
+        #if it should have a whitespace at this index
+        if i in li_index:
+            x = x[0:i] + ' ' + x[i:]
+            li_split_index = [i+1 for i in li_split_index]
+            #print('whitespace',i,li_split_index)
+            
+        #if it should be splitted at this place
+        if i in li_split_index:
+            #print('splitted',i,li_split_index)
+            li_x_r.append(x[last_split_index+1:i+1])
+            last_split_index = i
+            
+    #add last part and return
+    li_x_r.append(x[last_split_index+1:])
+    return([i.strip() for i in li_x_r if i!=' '])
+#small example: from a text and a list of title, without taking into account whitespace, we want to split it, keeping
+#at the end the whitespace too
+#text = 'hello snake1 and goodbye snake  2b jkjk labla snake3 '
+#li_title = ['snake1', 'snake 2', 'snake3']
+#text_nws = ''.join(text.split(' '))
+#li_title_nws = [''.join(x.split(' ')) for x in li_title]
+#print(li_title_nws)
+#pattern = ''
+#for p in li_title_nws:
+#    pattern = pattern+'|'+p
+#pattern = pattern.strip('|')
+#print(pattern)
+#pattern = re.compile(r'(%s)'%pattern)
+#li_text_nws = pattern.split(text_nws)
+#print(li_text_nws)
+#li_ws_index = [m.start() for m in re.finditer(' ', text)]
+#print(li_ws_index)
+#from_string_without_whitespace_to_string_withwithespace(li_text_nws, li_ws_index)
+
+
+#from doxc file extract all the bold text , outputing one string. the idea is to extract letter by letter and when one is not bold, we will not add to the ouput (except when its a whitespace and before was a bold letter
+def extract_bold_text(document):
+    li_bolds = []
+    for para in document.paragraphs:
+        last_was_bold = 0
+        li_bolds.append(' ')
+        for run in para.runs:
+            if run.bold:
+                li_bolds.append(run.text)
+                last_was_bold = 1
+            elif (last_was_bold==1) & (run.text==' '):
+                li_bolds.append(run.text)
+                last_was_bold = 0
+    return(''.join(li_bolds))
+
+
+#from a text (chapter text) and with a list of bold-title to find, we will output the text splitted with the titles
+#or closest matched titles
+def from_chapter_to_structured_data(text, li_title):
+    
+    #remove all whitespace as these are not equally ditributed in the bold or in the text outptu
+    text_nws = ''.join(text.split(' '))
+    li_title_nws = [''.join(x.split(' ')) for x in li_title]
+    
+    #get index of whitespace in original text
+    li_ws_index = [m.start() for m in re.finditer(' ', text)]
+    
+    #create a list of titles which all match 
+    li_matched_title = []
+    title_not_matched = []
+    li_distance = []
+    for i,title in enumerate(li_title):
+        r = find_near_matches(title, text_nws, max_deletions=max(int(0.10*len(title)),1), 
+                              max_insertions=max(int(0.05*len(title)),1), max_substitutions=0)
+        if len(r)==1:
+            li_matched_title.append(text[r[0][0]:r[0][1]])
+            li_distance.append(r[0][2])
+        #keep track of non-matched title (to add rules perhaps or allow more flexibility: TODO)
+        elif len(r)==0:
+            print(title)
+            title_not_matched.append(title)
+        else:
+            print(r)
+
+    #create a list from text by splitting it with the titles
+    pattern = ''
+    for p in li_matched_title:
+        pattern = pattern+'|'+p.replace('(','\(').replace(')','\)').replace('|','\|') #caractere not supp in regex without backslash
+    pattern = pattern.strip('|')
+    pattern = re.compile(r'(%s)'%pattern)
+    li_text_nws = pattern.split(text_nws)
+    
+    #compute and return the splited list with adequate whitespace
+    r = from_string_without_whitespace_to_string_withwithespace(li_text_nws, li_ws_index)
+    return(r, title_not_matched, li_matched_title, li_distance)
+
+
+
+###################################################################################################
+####################################### manage data  for ML #######################################
+###################################################################################################
+
+def split_test_train_within_cat(df,p_test, category_to_split_within, id_to_split_with):
+    
+    #create lists (one test one train) of id within each category 
+    li_test = []
+    li_train = []
+    for i,j in df.groupby([category_to_split_within]):
+        li = list(j[id_to_split_with].unique())
+        #shuffle list
+        random.shuffle(li)
+        n1 = int(len(li)*p_test)
+        li_test.extend(li[0:n1])
+        li_train.extend(li[n1:])
         
-        
-        
+    #create associated dataframes    
+    df_test = df[df[id_to_split_with].isin(li_test)]
+    df_train = df[df[id_to_split_with].isin(li_train)]
+    return(df_test, df_train)
+
+###################################################################################################
+############################################### plot ##############################################
+###################################################################################################
+
+# will be used in the next fct. Its is used to create a list of length x for the explode parameter in the donut plot
+def list_same_number_with_threshold(x, v, nbr_set, nbr_without_explode):
+    if x<nbr_without_explode:
+        return(np.repeat(0,x))
+    else:
+        li = list(np.repeat(0,nbr_without_explode))
+        r = x-nbr_without_explode
+        n = int(r/nbr_set)
+    for i in range(nbr_set):
+        li.extend(list(np.repeat(v*(i+1), n)))
+    if len(li)<x:
+        li.extend(list(np.repeat(v*nbr_set,x-len(li))))
+    return(li)    
+
+
+#create a donut plot based on two lists, one for the names, and one for the associated quantity
+def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explode=50, fontsize_=6, circle_hole=0.75, nbr_set=5):
+    
+    #sort list of tuples according to second value
+    t = [(li_labels[i], li_sizes[i]) for i in range(len(li_labels))]
+    t.sort(key=lambda x: x[1])
+    t.reverse()
+    if min_val==None:
+        li_labels = [i[0] for i in t]
+        li_sizes = [i[1] for i in t]
+    else:
+        li_labels = [i[0] for i in t if i[1]>=min_val]
+        li_sizes = [i[1] for i in t if i[1]>=min_val]
+
+    #plot
+    fig1, ax1 = plt.subplots()
+    li_ = list_same_number_with_threshold(len(li_labels),v=v, nbr_set=nbr_set, nbr_without_explode=nbr_without_explode)
+    ax1.pie(li_sizes, labels=li_labels, startangle=90, explode=li_, rotatelabels=True, textprops={'fontsize': fontsize_})
+    
+    #circle
+    centre_circle = plt.Circle((0,0),circle_hole,fc='white')
+    fig = plt.gcf()
+    fig.gca().add_artist(centre_circle)
+    ax1.axis('equal')  #ensures that pie is drawn as a circle
+    plt.tight_layout()
+    
+    #save and show
+    plt.savefig(path, dpi=300, format='png', bbox_inches='tight')
+    plt.show()        
+    
+    
+###################################################################################################
+######################################### work with videos ########################################
+###################################################################################################
+    
+def save_all_frames_jpg(video_name, path_data, path_output):
+
+    #get video
+    vid = imageio.get_reader(os.path.join(path_data, video_name))
+
+    #create a director if not existing to save each image
+    p = os.path.join(path_output, video_name.split('.')[0])
+    if not os.path.exists(p):
+        os.makedirs(p)
+
+    #register all images
+    for num, im in tqdm.tqdm(enumerate(vid.iter_data())):
+        #try:
+        #converting to grayscale to gain time
+        im = color.rgb2gray(im)
+        scipy.misc.imsave(os.path.join(p,str(num)+'.jpg'), im)
+#        except:
+#            print('one image could not be save')
+
+            
+    
