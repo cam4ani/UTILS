@@ -20,10 +20,20 @@ import random
 import sys
 from operator import itemgetter
 import tqdm
+import colorsys
 import re
 #to match substring in string
 import fuzzysearch
 from fuzzysearch import find_near_matches
+
+#for eucledian distance computation (for centroids)
+from scipy.spatial import distance
+
+#to tranform binary mask to VGG polygons: does not support windows!!
+try:
+    from pycocotools import mask
+except:
+    print('you are on windows, so pycocotools can not be installed, hence you can not use convert_binary_mask_to_VGG_polygons')
 
 #parallel computing
 from multiprocessing import Pool
@@ -233,6 +243,40 @@ def from_path_scannpdf_book_2image(path, path_save, nbrp=2, plot_=0):
 ###################################################################################################
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
+
+#from a binary bbox (i.e. true where the rectangle-mask is and false elsewhere, to x,y,w,h bbox
+def binary_bbox_to_bbox(binary_mask):
+    #first row with True: y1
+    y1 = [i for i in range(len(binary_mask)) if True in binary_mask[i]][0]
+    #last row with true: y2
+    y2 = [i for i in range(len(binary_mask)) if True in binary_mask[i]][-1]
+    h = y2-y1
+    #first column with true: x1
+    x1 = list(binary_mask[y1]).index(True)
+    #last column with true: x2
+    x2 = len(binary_mask[y1])-list(reversed(binary_mask[y1])).index(True)
+    w = x2-x1
+    return(x1,y1,w,h)
+
+#takes a list of bbox ([(x1,x2,h1,h2),(x2,y2,h2,w2),...]) with the associated image and plot on the image
+def plot_bboxes(li_bboxes, image, li_text=None):
+    
+    #create plot with the bbox
+    fig,ax = plt.subplots(1)
+    ax.imshow(image)
+    for bbox in li_bboxes:
+        x,y,w,h = bbox
+        rect = patches.Rectangle((x,y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+        ax.add_patch(rect)
+        
+    #add text
+    if li_text!=None:
+        for (x,y,s) in li_text:
+            plt.text(x, y,s)   
+            
+    #show the plot        
+    plt.show()
+   
 
 #remove from alist of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
 #note that the (0,0) point in an image is up left.
@@ -556,8 +600,21 @@ class DataGenerator(keras.utils.Sequence):
     
     
 ###################################################################################################
-########################################### other - old ###########################################
+########################################### other & old ###########################################
 ###################################################################################################
+    
+#this fct was taken from internet tehn modified. It generate a list og random color
+def random_colors(N, bright=True):
+    """
+    To get visually distinct colors, generate them in HSV space then convert to RGB.
+    """
+    brightness = 1.0 if bright else 0.7
+    hsv = [(i / N, 1, brightness) for i in range(N)]
+    colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
+    random.shuffle(colors)
+    #convert from 0-1 to 0-255 integers
+    colors = [ (int(i[0]*255), int(i[1]*255), int(i[2]*255)) for i in colors]
+    return colors    
     
 #join several dico together without duplicate info but with all possible info
 def join_dico(li_s):
@@ -840,24 +897,98 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ######################################### work with videos ########################################
 ###################################################################################################
     
-def save_all_frames_jpg(video_name, path_data, path_output):
-
-    #get video
-    vid = imageio.get_reader(os.path.join(path_data, video_name))
-
-    #create a director if not existing to save each image
-    p = os.path.join(path_output, video_name.split('.')[0])
-    if not os.path.exists(p):
-        os.makedirs(p)
-
-    #register all images
-    for num, im in tqdm.tqdm(enumerate(vid.iter_data())):
-        #try:
-        #converting to grayscale to gain time
-        im = color.rgb2gray(im)
-        scipy.misc.imsave(os.path.join(p,str(num)+'.jpg'), im)
-#        except:
-#            print('one image could not be save')
-
+#from an initial dictionary of ids-object with their corresponding bbox it output a dico with the new ids& associated bboxes
+#max_used_id: bigger object id already used
+def simple_bbox_tracker(dico0_id_bboxes, li_bboxes, max_used_id, smaller_dist=100):
+    
+    #TODO: if two new object has the same id
+    
+    #if no old object return the new object with new ids
+    if len(dico0_id_bboxes)==0:
+        return({max_used_id+i+1:li_bboxes[i] for i in range(len(li_bboxes))})
+        
+    #compute centroids of old objects
+    dico0_id_centroids = {id_:(x + int(w/2), y + int(h/2)) for id_,(x,y,w,h) in dico0_id_bboxes.items()}    
+    
+    #initialise
+    dico_id_bboxes = {}
+    
+    #pass through each new object
+    for new_object in li_bboxes:
+        
+        #compute centroids of the new object
+        x,y,w,h = new_object
+        xmid = x + int(w/2)
+        ymid = y + int(h/2)
+        
+        #compute the euclidean distance with centroids of old objects
+        dico_id0_distance = {k:distance.euclidean((xmid,ymid), (xmid0,ymid0)) for k,(xmid0,ymid0) in dico0_id_centroids.items()}
+        
+        #if the smaller distance is smaller than 'smaller_dist', then use this id for the new obj, otherwise assign a new id
+        possible_corresponding_id, d = min(dico_id0_distance.items(), key=lambda x: x[1])         
+        if d<smaller_dist:
+            dico_id_bboxes[possible_corresponding_id] = new_object
+        else:
+            max_used_id = max_used_id+1
+            dico_id_bboxes[max_used_id] = new_object
+    
+    return dico_id_bboxes
+    
+#givn an old dico-result and the new dico_id_bboxes with the X_LINE from which we need to count object, it will
+#update the dico-results of the form:
+#results = {'object_count':5,
+#           'frame_count':1,
+#           'dico_last_objects':{}}#{1:(61, 326, 175, 84), 2:(415, 145, 129, 87)}}
+def update_results(results, dico_id_bboxes, X_LINE):
+    
+    #update number of frames saw
+    results['frame_count'] = results['frame_count']+1
+    
+    #update the objects count
+    nbr_new_obj = len([i for i in list(dico_id_bboxes.keys()) if i not in list(results['dico_last_objects'].keys())])
+    results['object_count'] = results['object_count']+nbr_new_obj
+    
+    #update the last saw objects
+    results['dico_last_objects'] = dico_id_bboxes
+    
+    #see if an object pass the line
+    for id_, bbox in dico_id_bboxes.items():
+        x,y,w,h = bbox
+        xline = x+w*0.95
+        if xline>X_LINE:
+            results['li_id_passed_object'].append(id_)
+            results['li_id_passed_object'] = list(set(results['li_id_passed_object']))
+            results['object_pass'] = len(results['li_id_passed_object'])
             
+    return results    
+  
+#take an image with the associated dico_id_bbox and annotate (label, bbox, line) the image with one color per label and save it
+#to add more details: https://docs.opencv.org/3.1.0/dc/da5/tutorial_py_drawing_functions.html
+def label_image(dico_id_bbox, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color):
+        
+    #define font for text and nbr of coolr we have
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    nbr_color = len(dico_id_color)
+    
+    #draw rectangles with label and associated color
+    for id_, bbox in dico_id_bbox.items():
+        x,y,w,h = bbox
+        thickness = 3
+        cv2.rectangle(image, (x,y), (x+w,y+h), dico_id_color[id_%nbr_color], thickness)
+        cv2.putText(image, str(id_), (x,y), font, 1, dico_id_color[id_%nbr_color], thickness, cv2.LINE_AA)
+        
+    #draw the end line (thickness 2)
+    cv2.line(image, (X_LINE,0), (X_LINE, FRAME_HEIGHT), (255,0,0), 2)
+    
+    #draw text count
+    if li_text!=None:
+        for (x,y,s) in li_text:
+            cv2.putText(image, s, (x,y), font, 1, (139, 0, 0), 1, cv2.LINE_AA)
+    
+    #return
+    return(image)
+    
+    
+    
+    
     
