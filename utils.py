@@ -276,7 +276,30 @@ def plot_bboxes(li_bboxes, image, li_text=None):
             
     #show the plot        
     plt.show()
-   
+
+    
+    
+#taken from mask-rcnn githubto apply mask: for later
+def apply_mask(image, mask, alpha=0.5):
+    """Apply the given mask to the image."""
+    color = random_colors(1)[0]
+    for c in range(3):
+        image[:, :, c] = np.where(mask == 1,
+                                  image[:, :, c] *
+                                  (1 - alpha) + alpha *color[c]* 255,
+                                  image[:, :, c])
+    return image
+
+#simple example
+#r = li_results[0]
+#image = cv2.imread(r['filename'])
+#masked_image = image.copy()
+#Mask
+#masks = r['masks']
+#for i in range(len(masks[0][0])):
+#    mask = masks[:, :, i]
+#    apply_mask(masked_image, mask)
+#plt.imshow(masked_image);
 
 #remove from alist of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
 #note that the (0,0) point in an image is up left.
