@@ -45,6 +45,9 @@ from pdf2image import convert_from_path
 import urllib.request
 from urllib.request import urlopen
 
+#compute simple similarity between two images
+from skimage.measure import compare_ssim
+
 #for data augmentation
 import imgaug as ia
 from imgaug import augmenters as iaa
@@ -258,6 +261,15 @@ def binary_bbox_to_bbox(binary_mask):
     w = x2-x1
     return(x1,y1,w,h)
 
+
+#from a bbox (x,y,w,h) output a polygons (can be hence used as a mask in mask-rcnn for e.g.)
+def from_bbox_get_polygon(bbox):
+    x,y,w,h = bbox
+    all_points_x = [x, x + w, x + w, x]
+    all_points_y = [y, y, y + h, y + h]  
+    return(all_points_x, all_points_y)
+
+
 #takes a list of bbox ([(x1,x2,h1,h2),(x2,y2,h2,w2),...]) with the associated image and plot on the image
 def plot_bboxes(li_bboxes, image, li_text=None):
     
@@ -277,7 +289,6 @@ def plot_bboxes(li_bboxes, image, li_text=None):
     #show the plot        
     plt.show()
 
-    
     
 #taken from mask-rcnn githubto apply mask: for later
 def apply_mask(image, mask, alpha=0.5):
@@ -919,6 +930,87 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ###################################################################################################
 ######################################### work with videos ########################################
 ###################################################################################################
+
+#from a video it create consecutives frames with a csv file indicating which one should be annotated and which one should be predicted
+def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index):
+    
+    #initialise video path
+    video_path = os.path.join(video_path, video_name)
+    
+    #check if video exists
+    if len(glob.glob(video_path))!=1:
+        print('the video does not exist at your path: %s'%video_path)
+        sys.exit()
+
+    #create directories if not existing to save images
+    path_save_images = os.path.join(path_image,'consecutives_frames_'+video_name.split('.')[0])
+    if not os.path.exists(path_save_images):
+        os.makedirs(path_save_images)
+
+    #read video 
+    video = cv2.VideoCapture(video_path)
+
+    #initialize list of annotation information
+    li_annotation_info = []
+        
+    # loop over frames from the video file stream
+    k = 0
+    id_ = 0
+    while True:
+
+        #take frames and check if we have reached the end of the video
+        (grabbed, image) = video.read()
+        if not grabbed:
+            break
+
+        #save the image
+        imageio.imwrite(os.path.join(path_save_images, str(id_)+'.jpg'), image)
+        
+        ##############################################################
+        ### see if its an 'annotated-image' or a 'predicted-image' ###
+        #if no benchmarking image yet create one and save the image
+        if k==0:
+            im_compared = image.copy()
+            annotation_type = 'annotation'
+            k = 1
+
+        #see if image should be annotated, i.e. if enough dissimilar from the last annotated one
+        if k==1:
+
+            #compute similarity between two possible consecutive annotated images
+            sim = compare_ssim(im_compared, image, multichannel=True)
+
+            #if not that similar from last annotation image, save for annotation & updated benchmarking image
+            if sim<sim_index:
+                im_compared = image.copy()
+                annotation_type = 'annotation'
+                k = k+1
+
+            #if similar save for detection and continue until find one not similar to save
+            else:
+                annotation_type = 'detection'
+                k = 1
+
+        else:
+            #otherwise save for detection
+            annotation_type = 'detection'
+            k = k+1
+
+        if k%(gap+2)==0:
+            k = 1
+
+        #save info
+        li_annotation_info.append({'filename':str(id_), 'annotation_type': annotation_type})
+        #update id of frame
+        id_ = id_+1
+
+    #close video
+    video.release()
+    
+    #save as a csv file
+    df = pd.DataFrame(li_annotation_info)
+    df.to_csv(os.path.join(path_save_images, 'annotation_info.csv'), index=False, sep=';')
+    
     
 #from an initial dictionary of ids-object with their corresponding bbox it output a dico with the new ids& associated bboxes
 #max_used_id: bigger object id already used
@@ -985,23 +1077,27 @@ def update_results(results, dico_id_bboxes, X_LINE):
             
     return results    
   
+    
 #take an image with the associated dico_id_bbox and annotate (label, bbox, line) the image with one color per label and save it
 #to add more details: https://docs.opencv.org/3.1.0/dc/da5/tutorial_py_drawing_functions.html
-def label_image(dico_id_bbox, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color):
+def label_image(dico_id_bbox, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color, has_bbox, has_label, has_line):
         
-    #define font for text and nbr of coolr we have
+    #define font for text and nbr of color we have
     font = cv2.FONT_HERSHEY_SIMPLEX
     nbr_color = len(dico_id_color)
-    
+   
     #draw rectangles with label and associated color
     for id_, bbox in dico_id_bbox.items():
         x,y,w,h = bbox
         thickness = 3
-        cv2.rectangle(image, (x,y), (x+w,y+h), dico_id_color[id_%nbr_color], thickness)
-        cv2.putText(image, str(id_), (x,y), font, 1, dico_id_color[id_%nbr_color], thickness, cv2.LINE_AA)
+        if has_bbox:
+            cv2.rectangle(image, (x,y), (x+w,y+h), dico_id_color[id_%nbr_color], thickness)
+        if has_label:
+            cv2.putText(image, str(id_), (x,y), font, 1, dico_id_color[id_%nbr_color], thickness, cv2.LINE_AA)
         
     #draw the end line (thickness 2)
-    cv2.line(image, (X_LINE,0), (X_LINE, FRAME_HEIGHT), (255,0,0), 2)
+    if has_line:
+        cv2.line(image, (X_LINE,0), (X_LINE, FRAME_HEIGHT), (255,0,0), 2)
     
     #draw text count
     if li_text!=None:
