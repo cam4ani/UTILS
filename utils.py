@@ -33,7 +33,7 @@ from scipy.spatial import distance
 try:
     from pycocotools import mask
 except:
-    print('you are on windows, so pycocotools can not be installed, hence you can not use convert_binary_mask_to_VGG_polygons')
+    print('you are on windows, so pycocotools can not be installed')
 
 #parallel computing
 from multiprocessing import Pool
@@ -46,6 +46,7 @@ import urllib.request
 from urllib.request import urlopen
 
 #compute simple similarity between two images
+from skimage import measure
 from skimage.measure import compare_ssim
 
 #for data augmentation
@@ -55,7 +56,6 @@ from imgaug import augmenters as iaa
 #videos
 import imageio
 from skimage import color
-import scipy.misc
 
 #plot
 import matplotlib.cm as cm
@@ -514,40 +514,38 @@ def image_augmentation_with_maskrcnn(ID, n1, n2, image_path, mask_path, augmenta
     return(image)
 
 
-#for maskrcnn
-#function that from mask output of the mask-RCNN model give the VGG mask anotation: all_points_x, all_points_y
+#function that from mask output of the mask-RCNN model give the VGG mask anotation: li_all_points_x, li_all_points_y of the length of the number of masks (R should be of format of mask output from mask rcnn)
 def convert_binary_mask_to_VGG_polygons(R):
-    l, c = R.shape[0:2]
     R = R.astype(np.uint8)
-    R.resize([l, c])
-    fortran_R = np.asfortranarray(R)
-    encoded_ground_truth = mask.encode(fortran_R)
-    ground_truth_area = mask.area(encoded_ground_truth)
-    ground_truth_bounding_box = mask.toBbox(encoded_ground_truth)
-    contours = measure.find_contours(R, 0.5)
-    #we keep additional info in case its needed once
-    annotation = {
-            "segmentation": [],
-            "area": ground_truth_area.tolist(),
-            "iscrowd": 0,
-            "image_id": 123,
-            "bbox": ground_truth_bounding_box.tolist(),
-            "category_id": 1,
-            "id": 1
-        }
-
-    for contour in contours:
-        contour = np.flip(contour, axis=1)
-        segmentation = contour.ravel().tolist()
-        annotation["segmentation"].append(segmentation)
-
-    T = annotation
-    all_points_x = [T['segmentation'][0][j] for j in range(len(T['segmentation'][0])) if j%2==0] #all even numbers
-    all_points_y = [T['segmentation'][0][j] for j in range(len(T['segmentation'][0])) if j%2!=0] #all odd numbers
-    return(all_points_x, all_points_y)
-
-
+    l, c, channel = R.shape
+    li_R = []
+    for i in range(channel):
+        li_R.append(R[:,:,i])
+    len(li_R)
+    li_seg = []
+    for r in li_R: 
+        contours = measure.find_contours(r, 0.5)
+        seg = []
+        for contour in contours:
+            contour = np.flip(contour, axis=1)
+            segmentation = contour.ravel().tolist()
+            seg.extend(segmentation) #havent check when their is several contours in one mask
+        li_seg.append(seg)
+    li_all_points_x = []
+    li_all_points_y = []
+    for i in range(channel):
+        li_all_points_x.append([li_seg[i][j] for j in range(len(li_seg[i])) if j%2==0]) #all even numbers
+        li_all_points_y.append([li_seg[i][j] for j in range(len(li_seg[i])) if j%2!=0]) #all odd numbers
+    return(li_all_points_x, li_all_points_y)
 #all_points_x, all_points_y = convert_binary_mask_to_VGG_polygons(r['masks'])
+#create bbox out of binary mask
+#l, c = R.shape[0:2]
+#R = R.astype(np.uint8)
+#R.resize([l, c])
+#fortran_R = np.asfortranarray(R)
+#encoded_ground_truth = mask.encode(fortran_R)
+#ground_truth_area = mask.area(encoded_ground_truth)
+#ground_truth_bounding_box = mask.toBbox(encoded_ground_truth)
 
 
 ###################################################################################################
@@ -971,11 +969,11 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
         #if no benchmarking image yet create one and save the image
         if k==0:
             im_compared = image.copy()
-            annotation_type = 'annotation'
+            annotation_type = 'detection'
             k = 1
 
         #see if image should be annotated, i.e. if enough dissimilar from the last annotated one
-        if k==1:
+        elif k==1:
 
             #compute similarity between two possible consecutive annotated images
             sim = compare_ssim(im_compared, image, multichannel=True)
@@ -1000,7 +998,7 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
             k = 1
 
         #save info
-        li_annotation_info.append({'filename':str(id_), 'annotation_type': annotation_type})
+        li_annotation_info.append({'filename':str(id_)+'jpg', 'annotation_type': annotation_type})
         #update id of frame
         id_ = id_+1
 
