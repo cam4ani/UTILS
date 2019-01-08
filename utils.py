@@ -289,28 +289,6 @@ def plot_bboxes(li_bboxes, image, li_text=None):
     #show the plot        
     plt.show()
 
-    
-#taken from mask-rcnn githubto apply mask: for later
-def apply_mask(image, mask, alpha=0.5):
-    """Apply the given mask to the image."""
-    color = random_colors(1)[0]
-    for c in range(3):
-        image[:, :, c] = np.where(mask == 1,
-                                  image[:, :, c] *
-                                  (1 - alpha) + alpha *color[c]* 255,
-                                  image[:, :, c])
-    return image
-
-#simple example
-#r = li_results[0]
-#image = cv2.imread(r['filename'])
-#masked_image = image.copy()
-#Mask
-#masks = r['masks']
-#for i in range(len(masks[0][0])):
-#    mask = masks[:, :, i]
-#    apply_mask(masked_image, mask)
-#plt.imshow(masked_image);
 
 #remove from alist of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
 #note that the (0,0) point in an image is up left.
@@ -572,7 +550,7 @@ class DataGenerator(keras.utils.Sequence):
         self.image_path = image_path
         self.mask_path = mask_path
         self.labels = labels
-        self.age = age
+        #self.age = age
         self.list_IDs = list_IDs
         self.n_channels = n_channels
         self.n_classes = n_classes
@@ -635,7 +613,7 @@ class DataGenerator(keras.utils.Sequence):
 ########################################### other & old ###########################################
 ###################################################################################################
     
-#this fct was taken from internet tehn modified. It generate a list og random color
+#this fct was taken from internet then modified. It generate a list og random color
 def random_colors(N, bright=True):
     """
     To get visually distinct colors, generate them in HSV space then convert to RGB.
@@ -646,7 +624,7 @@ def random_colors(N, bright=True):
     random.shuffle(colors)
     #convert from 0-1 to 0-255 integers
     colors = [ (int(i[0]*255), int(i[1]*255), int(i[2]*255)) for i in colors]
-    return colors    
+    return(colors    )
     
 #join several dico together without duplicate info but with all possible info
 def join_dico(li_s):
@@ -1012,22 +990,22 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
     
 #from an initial dictionary of ids-object with their corresponding bbox it output a dico with the new ids& associated bboxes
 #max_used_id: bigger object id already used
-def simple_bbox_tracker(dico0_id_bboxes, li_bboxes, max_used_id, smaller_dist=100):
+def simple_bbox_tracker(dico0_id_bboxes_mask, li_t_bboxes_mask, max_used_id, smaller_dist=100):
     
     #TODO: if two new object has the same id
-    
+        
     #if no old object return the new object with new ids
-    if len(dico0_id_bboxes)==0:
-        return({max_used_id+i+1:li_bboxes[i] for i in range(len(li_bboxes))})
+    if len(dico0_id_bboxes_mask)==0:
+        return({max_used_id+i+1:li_t_bboxes_mask[i] for i in range(len(li_t_bboxes_mask))})
         
     #compute centroids of old objects
-    dico0_id_centroids = {id_:(x + int(w/2), y + int(h/2)) for id_,(x,y,w,h) in dico0_id_bboxes.items()}    
+    dico0_id_centroids = {id_:(x + int(w/2), y + int(h/2)) for id_,((x,y,w,h),mask) in dico0_id_bboxes_mask.items()}    
     
     #initialise
-    dico_id_bboxes = {}
+    dico_id_bboxes_mask = {}
     
     #pass through each new object
-    for new_object in li_bboxes:
+    for new_object, mask in li_t_bboxes_mask:
         
         #compute centroids of the new object
         x,y,w,h = new_object
@@ -1040,32 +1018,32 @@ def simple_bbox_tracker(dico0_id_bboxes, li_bboxes, max_used_id, smaller_dist=10
         #if the smaller distance is smaller than 'smaller_dist', then use this id for the new obj, otherwise assign a new id
         possible_corresponding_id, d = min(dico_id0_distance.items(), key=lambda x: x[1])         
         if d<smaller_dist:
-            dico_id_bboxes[possible_corresponding_id] = new_object
+            dico_id_bboxes_mask[possible_corresponding_id] = (new_object, mask)
         else:
             max_used_id = max_used_id+1
-            dico_id_bboxes[max_used_id] = new_object
+            dico_id_bboxes_mask[max_used_id] = (new_object, mask)
     
-    return dico_id_bboxes
+    return dico_id_bboxes_mask
     
 #givn an old dico-result and the new dico_id_bboxes with the X_LINE from which we need to count object, it will
 #update the dico-results of the form:
 #results = {'object_count':5,
 #           'frame_count':1,
 #           'dico_last_objects':{}}#{1:(61, 326, 175, 84), 2:(415, 145, 129, 87)}}
-def update_results(results, dico_id_bboxes, X_LINE):
+def update_results(results, dico_id_bboxes_mask, X_LINE):
     
     #update number of frames saw
     results['frame_count'] = results['frame_count']+1
     
     #update the objects count
-    nbr_new_obj = len([i for i in list(dico_id_bboxes.keys()) if i not in list(results['dico_last_objects'].keys())])
+    nbr_new_obj = len([i for i in list(dico_id_bboxes_mask.keys()) if i not in list(results['dico_last_objects'].keys())])
     results['object_count'] = results['object_count']+nbr_new_obj
     
     #update the last saw objects
-    results['dico_last_objects'] = dico_id_bboxes
+    results['dico_last_objects'] = dico_id_bboxes_mask
     
     #see if an object pass the line
-    for id_, bbox in dico_id_bboxes.items():
+    for id_, (bbox,mask) in dico_id_bboxes_mask.items():
         x,y,w,h = bbox
         xline = x+w*0.95
         if xline>X_LINE:
@@ -1075,24 +1053,48 @@ def update_results(results, dico_id_bboxes, X_LINE):
             
     return results    
   
+#return the image with the (not several) mask on it   
+#color must be a tuple with integer from 0 to 255
+def apply_mask(image, mask, color, alpha=0.5):
+    """return the image with the mask on it"""
+    for c in range(3):
+        image[:, :, c] = np.where(mask == 1, 
+                                  image[:, :, c] *(1 - alpha) + alpha *color[c], 
+                                  image[:, :, c])
+    return(image)
+
+#simple example
+#r = li_results[0]
+#image = cv2.imread(r['filename'])
+#masked_image = image.copy()
+#Mask
+#masks = r['masks']
+#for i in range(len(masks[0][0])):
+#    mask = masks[:, :, i]
+#    apply_mask(masked_image, mask)
+#plt.imshow(masked_image);    
     
 #take an image with the associated dico_id_bbox and annotate (label, bbox, line) the image with one color per label and save it
 #to add more details: https://docs.opencv.org/3.1.0/dc/da5/tutorial_py_drawing_functions.html
-def label_image(dico_id_bbox, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color, has_bbox, has_label, has_line):
+def label_image(dico_id_bboxes_mask, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color, has_bbox, has_label, has_line, has_masks, alpha):
         
     #define font for text and nbr of color we have
     font = cv2.FONT_HERSHEY_SIMPLEX
     nbr_color = len(dico_id_color)
    
-    #draw rectangles with label and associated color
-    for id_, bbox in dico_id_bbox.items():
+    #draw rectangles with label, masks and associated color
+    for id_, d in dico_id_bboxes_mask.items():
+        bbox, mask = d
         x,y,w,h = bbox
         thickness = 3
+        color = dico_id_color[id_%nbr_color]
         if has_bbox:
-            cv2.rectangle(image, (x,y), (x+w,y+h), dico_id_color[id_%nbr_color], thickness)
+            cv2.rectangle(image, (x,y), (x+w,y+h), color, thickness)
         if has_label:
-            cv2.putText(image, str(id_), (x,y), font, 1, dico_id_color[id_%nbr_color], thickness, cv2.LINE_AA)
-        
+            cv2.putText(image, str(id_), (x,y), font, 1, color, thickness, cv2.LINE_AA)
+        if has_masks:
+             image = apply_mask(image, mask, color, alpha)
+   
     #draw the end line (thickness 2)
     if has_line:
         cv2.line(image, (X_LINE,0), (X_LINE, FRAME_HEIGHT), (255,0,0), 2)
