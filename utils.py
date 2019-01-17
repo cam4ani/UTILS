@@ -269,6 +269,16 @@ def from_bbox_get_polygon(bbox):
     all_points_y = [y, y, y + h, y + h]  
     return(all_points_x, all_points_y)
 
+def from_vggbbox_get_vggpolygon(x):
+    x_poly = []
+    for r in x:
+        p = r['shape_attributes']
+        all_points_x, all_points_y = from_bbox_get_polygon((p['x'], p['y'], p['width'], p['height']))
+        x_poly.append({'shape_attributes':{'all_points_x':all_points_x,
+                                           'all_points_y':all_points_y,
+                                           'name':'polygon'}})
+    return x_poly
+
 
 #takes a list of bbox ([(x1,x2,h1,h2),(x2,y2,h2,w2),...]) with the associated image and plot on the image
 def plot_bboxes(li_bboxes, image, li_text=None):
@@ -524,6 +534,40 @@ def convert_binary_mask_to_VGG_polygons(R):
 #encoded_ground_truth = mask.encode(fortran_R)
 #ground_truth_area = mask.area(encoded_ground_truth)
 #ground_truth_bounding_box = mask.toBbox(encoded_ground_truth)
+
+#taken from: https://stackoverflow.com/questions/2573997/reduce-number-of-points-in-line
+def _vec2d_dist(p1, p2):
+    return (p1[0] - p2[0])**2 + (p1[1] - p2[1])**2
+
+def _vec2d_sub(p1, p2):
+    return (p1[0]-p2[0], p1[1]-p2[1])
+
+def _vec2d_mult(p1, p2):
+    return p1[0]*p2[0] + p1[1]*p2[1]
+
+def ramerdouglas(line, dist):
+    """Does Ramer-Douglas-Peucker simplification of a curve with `dist`
+    threshold.
+    line: is a list-of-tuples, where each tuple is a 2D coordinate
+    """
+    if len(line) < 3:
+        return line
+
+    (begin, end) = (line[0], line[-1]) if line[0] != line[-1] else (line[0], line[-2])
+
+    distSq = []
+    for curr in line[1:-1]:
+        tmp = (
+            _vec2d_dist(begin, curr) - _vec2d_mult(_vec2d_sub(end, begin), _vec2d_sub(curr, begin)) ** 2 / (0.001+_vec2d_dist(begin, end)))
+        distSq.append(tmp)
+
+    maxdist = max(distSq)
+    if maxdist < dist ** 2:
+        return [begin, end]
+
+    pos = distSq.index(maxdist)
+    return (ramerdouglas(line[:pos + 2], dist) + 
+            ramerdouglas(line[pos + 1:], dist)[1:])
 
 
 ###################################################################################################
@@ -853,6 +897,38 @@ def split_test_train_within_cat(df,p_test, category_to_split_within, id_to_split
     df_train = df[df[id_to_split_with].isin(li_train)]
     return(df_test, df_train)
 
+
+#for regression models
+def df_to_arrays(df, names=None):
+    """ Transforms the columns or arrays from the input into an output consisting of two arrays.
+    Inputs:
+    df - a dataframe, a numpy.ndarray with 2 columns or a list with 2 elements (either of type numpy.array or pandas.core.series.Series)
+    names - list of names for the columns if the first argument is a dataframe. names[0] should be all features names, names[1 should be the value to predict
+    Outputs: the resulting arrays
+    """
+    if isinstance(df, pd.core.frame.DataFrame):
+        if not names:
+            raise ValueError('Names of columns to be analyzed in the df need to be given')
+        else:
+            if len(names[1])!=1:
+                raise ValueError('the second element from names var should be only the predicted var name, i.e. of lenght 1')
+            #remove nan
+            df = df.dropna(subset=names[0]+names[1])
+            x = df.loc[:, names[0]]; y = df.loc[:, names[1]]
+            
+    elif isinstance(df, numpy.ndarray):
+        if df.shape[1] != 2:
+            raise ValueError('The array needs to have eaxctly 2 columns')
+        else:
+            x = df[:,0]; y = df[:,1]
+            
+    else:    
+        if len(df) != 2:
+            raise ValueError('List of exactly 2 elements (pandas.core.series.Series or numpy.ndarray) needs to be given')
+        else:
+            x = df[0]; y = df[1]
+    return(x, y)
+
 ###################################################################################################
 ############################################### plot ##############################################
 ###################################################################################################
@@ -976,7 +1052,7 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
             k = 1
 
         #save info
-        li_annotation_info.append({'filename':str(id_)+'jpg', 'annotation_type': annotation_type})
+        li_annotation_info.append({'id':str(id_)+'jpg', 'annotation_type': annotation_type})
         #update id of frame
         id_ = id_+1
 
