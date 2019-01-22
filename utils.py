@@ -418,9 +418,9 @@ import imutils
 img = imutils.resize(image, width=500) '''
 
 
-#function that resize image keeping the aspect raito and adding less possible black pixel. In other words:
+#function that resize image keeping the aspect ratio and adding less possible black pixel. In other words:
 #function that takes as input an image, change the magnitude of the image to fit better the new dimension (n1, n2) and
-# finaly resize it to fit exactly the dimension keeping the intiial aspect ration and hence adding black pixel where 
+# finaly resize it to fit exactly the dimension keeping the initial aspect ration and hence adding black pixel where 
 #its needed.
 def adjust_size(image, h, w):
     
@@ -449,12 +449,11 @@ def adjust_size(image, h, w):
     
     return(image)
 
-#to use the preprocessing step used in inceptionv3 training for other purpose as well (in testing for example)
-#augmenta should be used in training essentially
+#to use the preprocessing step used in inceptionv3
 def image_augmentation_with_maskrcnn(ID, n1, n2, image_path, mask_path, augmentation=None, normalize=False, preprocessing=None,
                                     plot_3_image=False):
     
-    #downlaod image and mask
+    #download image and mask
     P = os.path.join(mask_path,'mask_output_'+ID+'.pkl') #in the next version dont save with mask_output in front
     mask = pickle.load(open(P, 'rb'))
     mask = mask['unique_binary_mask']
@@ -475,7 +474,6 @@ def image_augmentation_with_maskrcnn(ID, n1, n2, image_path, mask_path, augmenta
     if plot_3_image==True:
         image2 = image.copy()
 
-    
     #replace black pixel by smoothing with adequate color to keep all info, removing shape 
     image = remove_shape_keep_all_info(image)
     if plot_3_image==True:
@@ -574,7 +572,7 @@ def ramerdouglas(line, dist):
 ########################################## datagenerator ##########################################
 ###################################################################################################
 
-#in case you have images without need to do other specific preprocessing (i.e. not put black partout) you can simply use:
+#in case you have images in train/test/val folder and which does not need other specific preprocessing (i.e. not put black partout) you can simply use:
 '''test_datagen = ImageDataGenerator(rescale=1. / 255)
 
 train_generator = train_datagen.flow_from_directory(
@@ -583,7 +581,73 @@ train_generator = train_datagen.flow_from_directory(
     batch_size=batch_size,
     class_mode='binary') ... '''
 
-#to generate images for your model, you should have 
+#if you have images in one folder and csv fro training/testing/val (and images without mask)
+class DataGenerator_simple(keras.utils.Sequence):
+    '''Generates data for Keras
+    labels: class names'''
+    def __init__(self, list_IDs, labels, image_path, batch_size, n_rows, n_cols, n_channels, n_classes, 
+                 augmentation=None, preprocessing=None, shuffle=True, normalize=False):
+        self.n_rows = n_rows
+        self.n_cols = n_cols
+        self.batch_size = batch_size
+        self.image_path = image_path
+        self.labels = labels
+        self.list_IDs = list_IDs
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.shuffle = shuffle
+        self.normalize = normalize
+        self.augmentation = augmentation
+        self.preprocessing = preprocessing
+        self.on_epoch_end()
+
+    def __len__(self):
+        'number of step per epoch'
+        return int(np.floor(len(self.list_IDs) / self.batch_size))
+
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+        # Find list of IDs
+        list_IDs_temp = [self.list_IDs[k] for k in indexes]
+        # Generate data
+        return(self.__data_generation(list_IDs_temp))
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        self.indexes = np.arange(len(self.list_IDs))
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, list_IDs_temp):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels) where n_sampled=batch_size
+        # Initialization
+        X = np.empty((self.batch_size, self.n_rows, self.n_cols, self.n_channels))
+        y = np.empty((self.batch_size), dtype=int)
+
+        # Generate data
+        for i, ID in enumerate(list_IDs_temp): 
+            
+            #handle image
+            image = cv2.imread(os.path.join(self.image_path, ID+'.jpg'))
+            b,g,r = cv2.split(image)
+            image = cv2.merge([r,g,b])
+            #augment image
+            if self.augmentation is not None:
+                image = self.augmentation.augment_image(image)
+            #adapt to desired size
+            image = adjust_size(image, self.n_rows, self.n_cols)
+            X[i,] = image
+            
+            #handle class
+            y[i] = self.labels[ID]
+
+        return X, keras.utils.to_categorical(y, num_classes=self.n_classes)
+    
+
+
+#with mask (for inceptionv3 for example
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(self, list_IDs, labels, image_path, mask_path, batch_size, n_rows, n_cols, n_channels, n_classes, 
@@ -633,7 +697,7 @@ class DataGenerator(keras.utils.Sequence):
         # Generate data
         for i, ID in enumerate(list_IDs_temp):     
             #handle image
-            image = image_augmentation_with_maskrcnn(ID=ID, n1=self.n1,n2=self.n2, 
+            image = image_augmentation_with_maskrcnn(ID=ID, n1=self.n1, n2=self.n2, 
                                                      image_path=self.image_path, mask_path=self.mask_path,
                                                      augmentation=self.augmentation,
                                                      normalize=self.normalize,
@@ -879,7 +943,7 @@ def from_chapter_to_structured_data(text, li_title):
 ####################################### manage data  for ML #######################################
 ###################################################################################################
 
-def split_test_train_within_cat(df,p_test, category_to_split_within, id_to_split_with):
+def split_test_train_within_cat(df, p_test, category_to_split_within, id_to_split_with):
     
     #create lists (one test one train) of id within each category 
     li_test = []
