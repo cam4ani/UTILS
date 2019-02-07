@@ -783,6 +783,57 @@ def keep_goodone_singplu(x1,x2):
 #the plural are: pie cakess, pie cakes -->'pie cake'
 
 
+#taken from: 
+#from:https://github.com/benhamner/Metrics/blob/master/Python/ml_metrics/quadratic_weighted_kappa.py
+def histogram(ratings):
+    """Returns the counts of each type of rating that a rater made"""
+    min_rating = min(ratings)
+    max_rating = max(ratings)
+    num_ratings = int(max_rating - min_rating + 1)
+    hist_ratings = [0 for x in range(num_ratings)]
+    for r in ratings:
+        hist_ratings[r - min_rating] += 1
+    return hist_ratings
+def quadratic_weighted_kappa(rater_a, rater_b):
+    """
+    Calculates the quadratic weighted kappa
+    quadratic_weighted_kappa calculates the quadratic weighted kappa
+    value, which is a measure of inter-rater agreement between two raters
+    that provide discrete numeric ratings.  Potential values range from -1
+    (representing complete disagreement) to 1 (representing complete
+    agreement).  A kappa value of 0 is expected if all agreement is due to
+    chance.
+    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
+    each correspond to a list of integer ratings.  These lists must have the
+    same length.
+    The ratings should be integers, and it is assumed that they contain
+    the complete range of possible ratings.
+    """
+    rater_a = np.array(rater_a, dtype=int)
+    rater_b = np.array(rater_b, dtype=int)
+    assert(len(rater_a) == len(rater_b))
+    min_rating = min(min(rater_a), min(rater_b))
+    max_rating = max(max(rater_a), max(rater_b))
+    conf_mat = confusion_matrix(rater_a, rater_b)
+    num_ratings = len(conf_mat)
+    num_scored_items = float(len(rater_a))
+
+    hist_rater_a = histogram(rater_a, 0, 4)
+    hist_rater_b = histogram(rater_b, 0, 4)
+    numerator = 0.0
+    denominator = 0.0
+
+    for i in range(num_ratings):
+        for j in range(num_ratings):
+            expected_count = (hist_rater_a[i] * hist_rater_b[j]
+                              / num_scored_items)
+            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
+            numerator += d * conf_mat[i][j] / num_scored_items
+            denominator += d * expected_count / num_scored_items
+
+    return 1.0 - numerator / denominator
+
+
 #output a itertools of tuples of all possible combinations of 2 elements form the list 'li'
 def all_subsets(li):
     return chain(*map(lambda x: combinations(li, x), range(2, 3)))
@@ -1048,7 +1099,7 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ###################################################################################################
 
 #from a video it create consecutives frames with a csv file indicating which one should be annotated and which one should be predicted
-def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index):
+def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index, reverse_rgb=False, need_save=True, save_in_folder=True):
     
     #initialise video path
     video_path = os.path.join(video_path, video_name)
@@ -1059,9 +1110,12 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
         sys.exit()
 
     #create directories if not existing to save images
-    path_save_images = os.path.join(path_image,'consecutives_frames_'+video_name.split('.')[0])
-    if not os.path.exists(path_save_images):
-        os.makedirs(path_save_images)
+    if save_in_folder:
+        path_save_images = os.path.join(path_image,'consecutives_frames_'+video_name.split('.')[0])
+        if not os.path.exists(path_save_images):
+            os.makedirs(path_save_images)
+    else:
+        path_save_images = path_image
 
     #read video 
     video = cv2.VideoCapture(video_path)
@@ -1079,8 +1133,12 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
         if not grabbed:
             break
 
+        if reverse_rgb:
+            b,g,r = cv2.split(image)           
+            image = cv2.merge([r,g,b])
+            
         #save the image
-        imageio.imwrite(os.path.join(path_save_images, str(id_)+'.jpg'), image)
+        imageio.imwrite(os.path.join(path_save_images, 'consecutives_frames_'+video_name.split('.')[0]+'_'+str(id_)+'.jpg'), image)
         
         ##############################################################
         ### see if its an 'annotated-image' or a 'predicted-image' ###
@@ -1124,8 +1182,9 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
     video.release()
     
     #save as a csv file
-    df = pd.DataFrame(li_annotation_info)
-    df.to_csv(os.path.join(path_save_images, 'annotation_info.csv'), index=False, sep=';')
+    if need_save:
+        df = pd.DataFrame(li_annotation_info)
+        df.to_csv(os.path.join(path_save_images, 'annotation_info.csv'), index=False, sep=';')
     
     
 #from an initial dictionary of ids-object with their corresponding bbox it output a dico with the new ids& associated bboxes
