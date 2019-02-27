@@ -280,8 +280,9 @@ def from_vggbbox_get_vggpolygon(x):
     return x_poly
 
 
-#takes a list of bbox ([(x1,x2,h1,h2),(x2,y2,h2,w2),...]) with the associated image and plot on the image
+#takes a list of bbox ([(x,y,w,h),...]) with the associated image and plot on the image
 def plot_bboxes(li_bboxes, image, li_text=None):
+    '''li_bboxes=[(x,y,w,h),...]'''
     
     #create plot with the bbox
     fig,ax = plt.subplots(1)
@@ -300,7 +301,7 @@ def plot_bboxes(li_bboxes, image, li_text=None):
     plt.show()
 
 
-#remove from alist of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
+#remove from a list of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
 #note that the (0,0) point in an image is up left.
 def remove_embedded_bbox(li_bbox, plot_bbox=0):
     
@@ -343,7 +344,6 @@ def remove_embedded_bbox(li_bbox, plot_bbox=0):
 #small test for embeded images
 #li_bbox = [(1281, 79, 933, 1425), (1557, 600, 282, 396)]
 #remove_embedded_bbox(li_bbox,plot_bbox=1)
-
 
 #take an image and return the image withou reflect
 def data_augmentation_remove_reflect(img):
@@ -1097,6 +1097,66 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ###################################################################################################
 ######################################### work with videos ########################################
 ###################################################################################################
+#from a video save the most dissimliar images
+def create_dissimilar_consecutive_frames(video_path, video_name, path_save_images, gap, sim_index, reverse_rgb=False, image_name_init=''):
+    
+    #initialise video path
+    video_path = os.path.join(video_path, video_name)
+    
+    #check if video exists
+    if len(glob.glob(video_path))!=1:
+        print('the video does not exist at your path: %s'%video_path)
+        sys.exit()
+
+    #read video 
+    video = cv2.VideoCapture(video_path)
+        
+    # loop over frames from the video file stream
+    k = 0
+    id_ = 0
+    while True:
+
+        #take frames and check if we have reached the end of the video
+        (grabbed, image) = video.read()
+        if not grabbed:
+            break
+
+        if reverse_rgb:
+            b,g,r = cv2.split(image)           
+            image = cv2.merge([r,g,b])
+         
+        if image is not None: 
+            #if no benchmarking image yet create one and save the image
+            if k==0:
+                im_compared = image.copy()
+                k = 1
+
+            #see if image should be savec, i.e. if enough dissimilar from the last annotated one
+            elif k==1:
+
+                #compute similarity between two possible consecutive annotated images
+                sim = compare_ssim(im_compared, image, multichannel=True)
+
+                #if not that similar from last annotation image, save & updated benchmarking image
+                if sim<sim_index:
+                    im_compared = image.copy()
+                    imageio.imwrite(os.path.join(path_save_images, image_name_init+video_name.split('.')[0]+'_'+str(id_)+'.jpg'), image)
+                    k = k+1
+
+                #if similar save for detection and continue until find one not similar to save
+                else:
+                    k = 1
+            else:
+                k = k+1
+
+            if k%(gap+2)==0:
+                k = 1
+
+            #update id of frame
+            id_ = id_+1
+
+    #close video
+    video.release()
 
 #from a video it create consecutives frames with a csv file indicating which one should be annotated and which one should be predicted
 def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index, reverse_rgb=False, need_save=True, save_in_folder=True):
