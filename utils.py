@@ -1116,7 +1116,8 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 
 #from a video save the most dissimilar images and several cosnecutively
 def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_save_images, gap, sim_index, 
-                                                  image_name_init='', nbr_consec=3, first_number_frames_to_consider=100000):
+                                                  image_name_init='', nbr_consec=3, first_number_frames_to_consider=100000,
+                                                  video_change_to_file=None):
     
     #initialise video path
     vp = os.path.join(video_path, video_name)
@@ -1204,7 +1205,7 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
 
             #update id of frame
             id_ = id_+1
-            #to be verified
+            #to be verified exactly
             if id_>=first_number_frames_to_consider:
                 break
 
@@ -1212,7 +1213,9 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
     video.release()
     
     #when all is finish put video in the 'done' folder (and remove from the other folder)
-    os.rename(vp, os.path.join(video_path, 'done', video_name) )
+    if video_change_to_file is None:
+        video_change_to_file = os.path.join(video_path, 'done') 
+    os.rename(vp, os.path.join(video_change_to_file, video_name) )
     
     
 #from a video save the most dissimliar images
