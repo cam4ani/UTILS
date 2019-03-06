@@ -16,6 +16,7 @@ import inflect
 import requests
 import json
 import random
+import shutil
 import sys
 from operator import itemgetter
 import tqdm
@@ -1113,12 +1114,50 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ###################################################################################################
 ######################################### work with videos ########################################
 ###################################################################################################
+#from a video save the most dissimilar images and several cosnecutively
+def create_1dissimilar_consecutive_frames(video_path, video_name, path_save_images, image_name_init='', 
+                                          nbr_consec=12, video_change_to_file=None):
+    '''save the nbr_consev first images'''
+    #initialise video path
+    vp = os.path.join(video_path, video_name)
+    
+    #check if video exists
+    if len(glob.glob(vp))!=1:
+        print('the video does not exist at your path: %s'%vp)
+        sys.exit()
 
+    #read video (create a threaded video stream)
+    video = cv2.VideoCapture(vp)
+        
+    #loop over frames from the video file stream
+    for n in range(nbr_consec):
+
+        #take frames and check if we have reached the end of the video
+        (grabbed, image) = video.read()
+        if not grabbed:
+            break
+
+        #put into black and white
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        imageio.imwrite(os.path.join(path_save_images, 
+                                     image_name_init+video_name.split('.')[0]+'_'+str(n+1)+'.jpg'), image)
+
+    #close video
+    video.release()
+    
+    #when all is finish put video in the 'done' folder (and remove from the other folder)
+    if video_change_to_file is None:
+        video_change_to_file = os.path.join(video_path, 'done') 
+    #os.rename(vp, os.path.join(video_change_to_file, video_name) )
+    shutil.move(vp, os.path.join(video_change_to_file, video_name) )
+    
+    
+    
 #from a video save the most dissimilar images and several cosnecutively
 def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_save_images, gap, sim_index, 
                                                   image_name_init='', nbr_consec=3, first_number_frames_to_consider=100000,
                                                   video_change_to_file=None):
-    
+    '''save the maximum of non-similar nbr_consev images '''
     #initialise video path
     vp = os.path.join(video_path, video_name)
     
@@ -1215,7 +1254,8 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
     #when all is finish put video in the 'done' folder (and remove from the other folder)
     if video_change_to_file is None:
         video_change_to_file = os.path.join(video_path, 'done') 
-    os.rename(vp, os.path.join(video_change_to_file, video_name) )
+    #os.rename(vp, os.path.join(video_change_to_file, video_name) )
+    shutil.move(vp, os.path.join(video_change_to_file, video_name) )
     
     
 #from a video save the most dissimliar images
