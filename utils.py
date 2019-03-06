@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 import pickle
 import cv2
-from sklearn.utils import shuffle
 import glob
 from PIL import Image
 import time
@@ -21,10 +20,18 @@ import sys
 from operator import itemgetter
 import tqdm
 import colorsys
+import operator
 import re
 #to match substring in string
 import fuzzysearch
 from fuzzysearch import find_near_matches
+
+#models
+from scipy import stats
+import sklearn
+from sklearn import *
+from sklearn.utils import shuffle
+from sklearn.model_selection import GridSearchCV
 
 #for eucledian distance computation (for centroids)
 from scipy.spatial import distance
@@ -50,6 +57,11 @@ from skimage import measure
 from skimage.measure import compare_ssim
 
 #for data augmentation
+#import imgaug as ia
+#from imgaug import augmenters as iaa
+#data augmentation
+#import local version of the library imgaug
+sys.path.append('C:\\Users\\camil\\Desktop\\animals_code\\imgaug')
 import imgaug as ia
 from imgaug import augmenters as iaa
 
@@ -121,7 +133,7 @@ def search_wikipedia_laguage(text, language='en'):
 
     
 #used for allrecipes.com for example    
-# Get HTML content if not already existing in our files (not to request it two times)
+#get HTML content if not already existing in our files (not to request it two times)
 def get(id, url, path_):
     # Check if file html was already dowloaded
     cache_path = os.path.join(path_, 'cache')
@@ -280,8 +292,9 @@ def from_vggbbox_get_vggpolygon(x):
     return x_poly
 
 
-#takes a list of bbox ([(x1,x2,h1,h2),(x2,y2,h2,w2),...]) with the associated image and plot on the image
+#takes a list of bbox ([(x,y,w,h),...]) with the associated image and plot on the image
 def plot_bboxes(li_bboxes, image, li_text=None):
+    '''li_bboxes=[(x,y,w,h),...], while in maskrcnn rois its given like this: y1, x1, y2, x2'''
     
     #create plot with the bbox
     fig,ax = plt.subplots(1)
@@ -300,7 +313,7 @@ def plot_bboxes(li_bboxes, image, li_text=None):
     plt.show()
 
 
-#remove from alist of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
+#remove from a list of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
 #note that the (0,0) point in an image is up left.
 def remove_embedded_bbox(li_bbox, plot_bbox=0):
     
@@ -343,7 +356,6 @@ def remove_embedded_bbox(li_bbox, plot_bbox=0):
 #small test for embeded images
 #li_bbox = [(1281, 79, 933, 1425), (1557, 600, 282, 396)]
 #remove_embedded_bbox(li_bbox,plot_bbox=1)
-
 
 #take an image and return the image withou reflect
 def data_augmentation_remove_reflect(img):
@@ -647,7 +659,7 @@ class DataGenerator_simple(keras.utils.Sequence):
     
 
 
-#with mask (for inceptionv3 for example
+#with mask (for inceptionv3 for example)
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(self, list_IDs, labels, image_path, mask_path, batch_size, n_rows, n_cols, n_channels, n_classes, 
@@ -720,7 +732,11 @@ class DataGenerator(keras.utils.Sequence):
 ###################################################################################################
 ########################################### other & old ###########################################
 ###################################################################################################
-    
+
+#round to the closest number with base 5
+def myround(x, base=5):
+    return int(base * round(float(x)/base))
+
 #this fct was taken from internet then modified. It generate a list og random color
 def random_colors(N, bright=True):
     """
@@ -1098,6 +1114,168 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ######################################### work with videos ########################################
 ###################################################################################################
 
+#from a video save the most dissimilar images and several cosnecutively
+def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_save_images, gap, sim_index, 
+                                                  image_name_init='', nbr_consec=3, first_number_frames_to_consider=100000):
+    
+    #initialise video path
+    vp = os.path.join(video_path, video_name)
+    
+    #check if video exists
+    if len(glob.glob(vp))!=1:
+        print('the video does not exist at your path: %s'%vp)
+        sys.exit()
+
+    #read video (creat a threaded video stream)
+    video = cv2.VideoCapture(vp)
+        
+    # loop over frames from the video file stream
+    k = 0
+    id_ = 0
+    while True:
+
+        #take frames and check if we have reached the end of the video
+        (grabbed, image) = video.read()
+        if not grabbed:
+            break
+
+        #put into black and white
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+         
+        if image is not None: 
+            #if no benchmarking image yet create one and save the image
+            if k==0:
+                
+                imageio.imwrite(os.path.join(path_save_images, 
+                                             image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_1.jpg'), 
+                                image)
+                
+                for n in range(nbr_consec-1):
+                    #take frames and check if we have reached the end of the video
+                    (grabbed, image) = video.read()
+                    if not grabbed:
+                        break
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                    imageio.imwrite(os.path.join(path_save_images, 
+                                                 image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_'+str(n+2)+'.jpg'), 
+                                    image)
+
+                #last image for comparaison
+                if image is not None:
+                    im_compared = image.copy()    
+                k = 1
+
+            #see if image should be save, i.e. if enough dissimilar from the last annotated one
+            elif k==1:
+
+                #compute similarity between two possible consecutive annotated images
+                sim = compare_ssim(im_compared, image, multichannel=False)
+
+                #if not that similar from last annotation image, save with the next 'nbr_consec-1' frames as one image 
+                #& updated benchmarking image
+                if sim<sim_index:
+                    imageio.imwrite(os.path.join(path_save_images, 
+                                                 image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_1.jpg'), 
+                                    image)
+                    
+                    for n in range(nbr_consec-1):
+                        #take frames and check if we have reached the end of the video
+                        (grabbed, image) = video.read()
+                        if not grabbed:
+                            break
+                        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                        imageio.imwrite(os.path.join(path_save_images, 
+                                                     image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_'+str(n+2)+'.jpg'), 
+                                        image)
+                    
+                    #last image for comparaison
+                    if image is not None:
+                        im_compared = image.copy() 
+                    k = k+1
+
+                #if similar save for detection and continue until find one not similar to save
+                else:
+                    k = 1
+            else:
+                k = k+1
+
+            if k%(gap+2)==0:
+                k = 1
+
+            #update id of frame
+            id_ = id_+1
+            #to be verified
+            if id_>=first_number_frames_to_consider:
+                break
+
+    #close video
+    video.release()
+    
+    #when all is finish put video in the 'done' folder (and remove from the other folder)
+    os.rename(vp, os.path.join(video_path, 'done', video_name) )
+    
+    
+#from a video save the most dissimliar images
+def create_dissimilar_consecutive_frames(video_path, video_name, path_save_images, gap, sim_index, reverse_rgb=False, image_name_init=''):
+    
+    #initialise video path
+    video_path = os.path.join(video_path, video_name)
+    
+    #check if video exists
+    if len(glob.glob(video_path))!=1:
+        print('the video does not exist at your path: %s'%video_path)
+        sys.exit()
+
+    #read video 
+    video = cv2.VideoCapture(video_path)
+        
+    # loop over frames from the video file stream
+    k = 0
+    id_ = 0
+    while True:
+
+        #take frames and check if we have reached the end of the video
+        (grabbed, image) = video.read()
+        if not grabbed:
+            break
+
+        if reverse_rgb:
+            b,g,r = cv2.split(image)           
+            image = cv2.merge([r,g,b])
+         
+        if image is not None: 
+            #if no benchmarking image yet create one and save the image
+            if k==0:
+                im_compared = image.copy()
+                k = 1
+
+            #see if image should be savec, i.e. if enough dissimilar from the last annotated one
+            elif k==1:
+
+                #compute similarity between two possible consecutive annotated images
+                sim = compare_ssim(im_compared, image, multichannel=True)
+
+                #if not that similar from last annotation image, save & updated benchmarking image
+                if sim<sim_index:
+                    im_compared = image.copy()
+                    imageio.imwrite(os.path.join(path_save_images, image_name_init+video_name.split('.')[0]+'_'+str(id_)+'.jpg'), image)
+                    k = k+1
+
+                #if similar save for detection and continue until find one not similar to save
+                else:
+                    k = 1
+            else:
+                k = k+1
+
+            if k%(gap+2)==0:
+                k = 1
+
+            #update id of frame
+            id_ = id_+1
+
+    #close video
+    video.release()
+
 #from a video it create consecutives frames with a csv file indicating which one should be annotated and which one should be predicted
 def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index, reverse_rgb=False, need_save=True, save_in_folder=True):
     
@@ -1272,6 +1450,7 @@ def apply_mask(image, mask, color, alpha=0.5):
 #    mask = masks[:, :, i]
 #    apply_mask(masked_image, mask)
 #plt.imshow(masked_image);    
+
     
 #take an image with the associated dico_id_bbox and annotate (label, bbox, line) the image with one color per label and save it
 #to add more details: https://docs.opencv.org/3.1.0/dc/da5/tutorial_py_drawing_functions.html
@@ -1306,7 +1485,149 @@ def label_image(dico_id_bboxes_mask, image, li_text, X_LINE, FRAME_HEIGHT, dico_
     #return
     return(image)
     
+###################################################################################################
+########################################### basic models ##########################################
+###################################################################################################
+
+#from internship S
+"""NOTE: IBM Watson works with decision tree instead of Random Forest and hence can visualize the tree and also give information about its leaves and the exact decisions"""
+
+def filter_df(df, func_dict, logical_op = operator.and_):
+    """ Function that filters rows of a dataframe based on a set of criteria for them.
+    Inputs: 
+    df - the dataframe to be filtered
+    func_dict - a dictionary with {key:value} = {column_name:filtering_function}. Filtering functions may receive just one argument: a dataframe column. See is0() below for an example.
+                Other examples: pandas.isnull or similar.
+    logical_op -  the logical operator to be used to connect the criteria.
+    Outputs: 
+    the filtered dataframe
+    """
+    res_bool = None
+    for col, operation in func_dict.items():
+        if res_bool is None:
+            res_bool = operation(df[col])
+        else: 
+            res_bool = logical_op(res_bool, operation(df[col]))
+    return df[res_bool]
+  
     
+def dfcols_to_arrays(df, names=None):
+    """ Transforms the columns or arrays from the input into an output consisting of two arrays.
+    Inputs:
+    df - a dataframe, a numpy.ndarray with 2 columns or a list with 2 elements (either of type numpy.array or pandas.core.series.Series)
+    names - list of names for the columns if the first argument is a dataframe
+    Outputs: the resulting arrays
+    """
+    if isinstance(df, pd.core.frame.DataFrame):
+        if not names:
+            raise ValueError('Names for the columns to be analyzed in the dataframe need to be given.')
+        else:
+            x = df.loc[:, names[0]]; y = df.loc[:, names[1]]
+    elif isinstance(df, np.ndarray):
+        if df.shape[1] != 2:
+            raise ValueError('The array needs to have eaxctly 2 columns')
+        else:
+            x = df[:,0]; y = df[:,1]
+    else:    
+        if len(df) != 2:
+            raise ValueError('List of exactly two elements (pd.core.series.Series or numpy.ndarray) needs to be given')
+        else:
+            x = df[0]; y = df[1]
+    return x, y    
+
+
+def random_forest_regressor_parameter_tunning(df, targetnames, varnames = None):  
+    
+    #create variables if not given
+    if varnames is None:
+        varnames = list(set(df.columns) - set(targetnames)) # automatically infer varnames
+
+    # remove Nan values from target columns
+    #filter_criteria = {x:pd.notnull for x in targetnames} 
+    #df = filter_df(df, filter_criteria)
+
+    # transform the data into format suitable for training the forest
+    X, y = dfcols_to_arrays(df, [varnames, targetnames])
+    c, r = y.shape
+    y = y.values.reshape(c,)
+    
+    #Crossvalidation:
+    np.random.seed(5)
+    rfc = sklearn.ensemble.RandomForestRegressor(n_estimators=50) 
+    param_grid = {'n_estimators': [2,3,5,10,50,100],'max_features': ['auto', 'sqrt', 'log2'],'min_samples_leaf':[1,3,5,10,20,30,50]}
+    CV_rfc = GridSearchCV(estimator=rfc, param_grid=param_grid)
+    CV_rfc.fit(X, y)
+    print (CV_rfc.best_params_)
+
+    #creat and train the forest
+    forest = sklearn.ensemble.RandomForestRegressor(n_estimators=CV_rfc.best_params_['n_estimators'],
+                                                    max_features=CV_rfc.best_params_['max_features'],
+                                                    min_samples_leaf=CV_rfc.best_params_['min_samples_leaf'])
+    forest = forest.fit(X, y)
+
+    #save the tree
+    #tree.export_graphviz(forest,out_file='tree.dot')
+    #i=0
+    #for tree_in_forest in forest.estimators_:
+    #    if i<1:
+    #        export_graphviz(tree_in_forest,feature_names=X.columns,filled=True,rounded=True,out_file='tree.dot')
+    #        i=i+1
+    
+    # standard deviations of feature importances 
+    std_importances = np.std([tree.feature_importances_ for tree in forest.estimators_], axis=0)
+
+    # sort the features by importance
+    sorted_importances = np.sort(forest.feature_importances_)[::-1]
+    sorted_importance_indices = np.argsort(forest.feature_importances_)[::-1]
+    sorted_importance_std = std_importances[sorted_importance_indices]
+    sorted_importance_featnames = [varnames[i] for i in sorted_importance_indices]
+
+    return sorted_importance_featnames, sorted_importances, sorted_importance_std
+
+
+def random_forest_classifier_parameter_tunning(df, targetnames, varnames = None):  
+    if varnames is None:
+        varnames = list(set(df.columns) - set(targetnames)) # automatically infer varnames
+
+    # remove Nan values from target columns
+    filter_criteria = {x:pd.notnull for x in targetnames} 
+    df = filter_df(df, filter_criteria)   
+
+    # convert numerical target columns into strings
+    df.loc[:,targetnames] = df.loc[:, targetnames].astype(str)  
+
+    # transform the data into format suitable for training the forest
+    X, y = dfcols_to_arrays(df, [varnames, targetnames])
+    c, r = y.shape
+    y = y.values.reshape(c,)
+    
+    #Crossvalidation:
+    np.random.seed()
+    rfc = sklearn.ensemble.ExtraTreesClassifier(n_estimators=50) 
+    param_grid = { 'n_estimators': [5,10,50,100],'max_features': ['auto', 'sqrt', 'log2'],
+                 'min_samples_leaf':[1,3,5,10,20]}
+    CV_rfc = GridSearchCV(estimator=rfc, param_grid=param_grid)
+    CV_rfc.fit(X, y)
+    print (CV_rfc.best_params_)
+
+    #create and train the forest
+    forest = sklearn.ensemble.ExtraTreesClassifier(n_estimators=CV_rfc.best_params_['n_estimators'],
+                                                   max_features=CV_rfc.best_params_['max_features'],
+                                                   min_samples_leaf=CV_rfc.best_params_['min_samples_leaf'],
+                                                   random_state=5)
+    forest = forest.fit(X, y)
+
+    # standard deviations of feature importances 
+    std_importances = np.std([tree.feature_importances_ for tree in forest.estimators_], axis=0)
+
+    # sort the features by importance
+    sorted_importances = np.sort(forest.feature_importances_)[::-1]
+    sorted_importance_indices = np.argsort(forest.feature_importances_)[::-1]
+    sorted_importance_std = std_importances[sorted_importance_indices]
+    sorted_importance_featnames = [varnames[i] for i in sorted_importance_indices]
+
+    return sorted_importance_featnames, sorted_importances, sorted_importance_std
+
     
     
     
