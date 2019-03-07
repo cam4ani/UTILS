@@ -1156,7 +1156,7 @@ def create_1dissimilar_consecutive_frames(video_path, video_name, path_save_imag
 #from a video save the most dissimilar images and several cosnecutively
 def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_save_images, gap, sim_index, 
                                                   image_name_init='', nbr_consec=3, first_number_frames_to_consider=100000,
-                                                  video_change_to_file=None):
+                                                  video_change_to_file=None, save_img_on_first_it=False):
     '''save the maximum of non-similar nbr_consev images '''
     #initialise video path
     vp = os.path.join(video_path, video_name)
@@ -1166,10 +1166,10 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
         print('the video does not exist at your path: %s'%vp)
         sys.exit()
 
-    #read video (creat a threaded video stream)
+    #read video (create a threaded video stream)
     video = cv2.VideoCapture(vp)
         
-    # loop over frames from the video file stream
+    #loop over frames from the video file stream
     k = 0
     id_ = 0
     while True:
@@ -1178,28 +1178,32 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
         (grabbed, image) = video.read()
         if not grabbed:
             break
-
-        #put into black and white
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-         
-        if image is not None: 
-            #if no benchmarking image yet create one and save the image
-            if k==0:
-                
+        id_ = id_+1
+        
+        if save_img_on_first_it:
+            if id_ == 1:
                 imageio.imwrite(os.path.join(path_save_images, 
-                                             image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_1.jpg'), 
-                                image)
-                
+                             image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_1.jpg'), 
+                image)
+
                 for n in range(nbr_consec-1):
-                    #take frames and check if we have reached the end of the video
+
+                    #take frames, check if we have reached the end of the video, if not put in black and white and update the id_
                     (grabbed, image) = video.read()
                     if not grabbed:
                         break
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                    id_ = id_+1
+
                     imageio.imwrite(os.path.join(path_save_images, 
                                                  image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_'+str(n+2)+'.jpg'), 
                                     image)
-
+        
+        if image is not None: 
+            
+            #if no benchmarking image yet create one
+            if k==0:
                 #last image for comparaison
                 if image is not None:
                     im_compared = image.copy()    
@@ -1219,15 +1223,19 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
                                     image)
                     
                     for n in range(nbr_consec-1):
-                        #take frames and check if we have reached the end of the video
+                        
+                        #take frames, check if we have reached the end of the video, if not put in black and white 
+                        #note that we wont update the id_ for image retrieval
                         (grabbed, image) = video.read()
                         if not grabbed:
                             break
                         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                      
                         imageio.imwrite(os.path.join(path_save_images, 
                                                      image_name_init+video_name.split('.')[0]+'_'+str(id_)+'_'+str(n+2)+'.jpg'), 
                                         image)
-                    
+
+   
                     #last image for comparaison
                     if image is not None:
                         im_compared = image.copy() 
@@ -1241,8 +1249,7 @@ def create_dissimilar_consecutive_frames_3consimg(video_path, video_name, path_s
 
             if k%(gap+2)==0:
                 k = 1
-
-            #update id of frame
+            
             id_ = id_+1
             #to be verified exactly
             if id_>=first_number_frames_to_consider:
@@ -1287,7 +1294,7 @@ def create_dissimilar_consecutive_frames(video_path, video_name, path_save_image
             image = cv2.merge([r,g,b])
          
         if image is not None: 
-            #if no benchmarking image yet create one and save the image
+            #if no benchmarking image yet create one
             if k==0:
                 im_compared = image.copy()
                 k = 1
