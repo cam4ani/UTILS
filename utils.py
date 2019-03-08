@@ -260,6 +260,65 @@ def from_path_scannpdf_book_2image(path, path_save, nbrp=2, plot_=0):
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
+#################### construct a list of consecutive blak and white image (if 3 image then result is a image, if  more
+#then its a pickle list)
+#fct that construct one image from a list of images (one images as one channel, the first one is the 1st channel etc)
+def construct_list_of_bw_image(li_images, li_index_to_keep=None):
+    
+    #convert images into black and white
+    li_images = [cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) for img in li_images]
+    h = max([img.shape[0] for img in li_images])
+    w = max([img.shape[1] for img in li_images])
+    
+    #if no index where given, then we will keep all
+    if li_index_to_keep is None: 
+        li_index_to_keep = range(0,len(li_images))
+    
+    #create new image made of black and white images
+    new_img = np.zeros(shape=(h, w, len(li_index_to_keep)))
+    for i,ind in enumerate(li_index_to_keep):
+        new_img[:,:,i] = li_images[ind]
+        
+    return(new_img.astype(np.uint8))
+
+
+#################### construct a channel image
+def threeimg_to_1(h,w,img1,img2,img3):
+    new_img = np.zeros(shape=(h, w, 3))
+    new_img[:,:,0] = img1
+    new_img[:,:,1] = img2
+    new_img[:,:,2] = img3
+    return(new_img)
+
+def reduce_li_img(li):
+    #convert images into black and white
+    li = [cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2GRAY) for img in li]
+    h = max([img.shape[0] for img in li])
+    w = max([img.shape[1] for img in li])
+    #create a smaller list reducing each set of three images to one image
+    li_smaller = []
+    for i in range(0,len(li),3):
+        li_smaller.append(threeimg_to_1(h, w, li[i], li[i+1], li[i+2]))    
+    return(li_smaller)
+
+#fct that construct one image from a list of images (one images as one channel, the first one is the 1st channel etc)
+def construct_image_3channels(li_images):
+    
+    #### check if its a power of 3, otherwise remove some imaegs to have a power of 3
+    li_power3 = [np.power(3,x) for x in range(1,len(li_images))]
+    l = max([x for x in li_power3 if x<=len(li_images)])
+    li =  li_images[0:l]
+    #if l!=len(li_images):
+    #    print('WARNING: we are not able to use %d images, as we need a power of 3 images'%(len(li_images)-l))
+    
+    #### now that we have a list of images of length a power of 3, we will recursively create images
+    while len(li)!=1:
+        li = reduce_li_img(li)
+        
+    return(li[0].astype(np.uint8))
+
+################################
+
 #from a binary bbox (i.e. true where the rectangle-mask is and false elsewhere, to x,y,w,h bbox
 def binary_bbox_to_bbox(binary_mask):
     #first row with True: y1
