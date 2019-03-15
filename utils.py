@@ -260,6 +260,37 @@ def from_path_scannpdf_book_2image(path, path_save, nbrp=2, plot_=0):
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
+#concatenate images 
+def concat_images(img1, img2, g=15):
+    """ Combines two (colored or black and white) images ndarrays side-by-side """
+    
+    #from black and white convert to 3 channel
+    if len(img1.shape)!=3:
+        img1 = skimage.color.gray2rgb(imga)
+    if len(img2.shape)!=3:
+        img1 = skimage.color.gray2rgb(imgb)
+        
+    #concat with white gap
+    h1,w1 = img1.shape[:2]
+    h2,w2 = img2.shape[:2]
+    new_img = np.zeros(shape=(np.max([h1, h2]), w1+w2+g, 3))
+    new_img[:h1,:w1]=img1
+    new_img[:h2,w1+g:w1+w2+g]=img2
+    new_img[:h2,w1:w1+g]=255
+    return(new_img)
+
+def concat_n_images(li_img, g=15):
+    """ Combines N color images from a list of image """
+    output = None
+    for i, img in enumerate(li_img):
+        if i==0:
+            output = img
+        else:
+            output = concat_images(output, img, g=15)
+    return(output.astype(int))
+
+#il regarde la ou cest bleu
+
 #################### construct a list of consecutive blak and white image (if 3 image then result is a image, if  more
 #then its a pickle list)
 #fct that construct one image from a list of images (one images as one channel, the first one is the 1st channel etc)
@@ -1737,6 +1768,191 @@ def random_forest_classifier_parameter_tunning(df, targetnames, varnames = None)
 
     return sorted_importance_featnames, sorted_importances, sorted_importance_std
 
+###################################################################################################
+################################## plot for deep learning models ##################################
+###################################################################################################
+    
+#took partly from internet, but i dont remember where from...
+
+##################### Class Activation Maps    
+def plot_heatmap(layer_, li_image, model, img_heatmap_separate=False, save_path=None):
+    fig = plt.figure(figsize=(15,15))
+    c = 4
+    l = int(len(li_image)/4) #round inf
+    img_w = li_image[0].shape[1]
+    img_h = li_image[0].shape[0]
+    fig = plt.figure(figsize=(int(c*img_w/100), int(l*img_h/100)))
+    for k,img in enumerate(li_image[0:c*l]):
+
+        #predict
+        x = np.reshape(img,[1,img.shape[0],img.shape[1],3])
+        preds = model.predict(x)
+        class_ = np.argmax(preds[0])
+
+        ###### compute heatmap ######
+        class_output = model.output[:, class_]
+        last_conv_layer = model.get_layer(layer_)
+        #gradient of the class_ with regard to the output feature map of layer_
+        grads = K.gradients(class_output, last_conv_layer.output)[0]
+
+        #vector of shape (192,), where each entry is the mean intensity of the gradient over a specific feature map channel
+        pooled_grads = K.mean(grads, axis=(0, 1, 2))
+
+        # This function allows us to access the values of the quantities we just defined:
+        # `pooled_grads` and the output feature map of `conv2d_94`, given a sample image
+        iterate = K.function([model.input], [pooled_grads, last_conv_layer.output[0]])
+        pooled_grads_value, conv_layer_output_value = iterate([x])
+
+        #We multiply each channel in the feature map array by "how important this channel is" with regard to the 
+        #predicted class. If the value is positif it means that this associated weight should be increased to be more sure 
+        #for this class prediction
+        for i in range(int(pooled_grads.shape[0])):
+            conv_layer_output_value[:, :, i] *= pooled_grads_value[i]
+
+        #The channel-wise mean of the resulting feature map is our heatmap of class activation
+        heatmap = np.mean(conv_layer_output_value, axis=-1)
+        heatmap = np.maximum(heatmap, 0)
+        heatmap /= np.max(heatmap)
+        #up-sampled to the input image resolution using bi-linear interpolation (INTER_LINEAR: by default)
+        heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+
+        #we convert the heatmap to RGB
+        heatmap = np.uint8(255 * heatmap)
+
+        #we apply the heatmap to the original image
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+
+        ###### compute uided Backpropagation ######
+        #TODO
+        #GBP = GuidedBackprop(pretrained_model)
+        # Get gradients
+        #guided_grads = GBP.generate_gradients(prep_img, target_class)
+
+        ###### fuse Guided Backpropagation and Grad-CAM visualizations via point- wise multiplication ######
+        #TODO
+        #cam_gb = np.multiply(grad_cam_mask, guided_backprop_mask)
+        
+        #convert to gray then add other channels to have 3 dimensions (so that one can add with map later)
+        gray = cv2.cvtColor(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+        #add with map
+        superimposed_img = cv2.addWeighted(gray, 0.6, heatmap, 0.3, 0.5)
+        
+        if img_heatmap_separate:
+            images = [img, heatmap, superimposed_img]
+            fig = plt.figure(figsize=(10,10))
+            plt.imshow(concat_n_images(images));
+            if save_path is not None: 
+                plt.savefig(save_path+str(k)+'.png',dpi=300,format='png',bbox_inches='tight')
+            plt.show()
+            
+        else:
+            plt.subplot(l,c,k+1)
+            plt.tight_layout()
+            plt.xticks([]) #remove xlabel annotations
+            plt.yticks([])
+            plt.title('bg:'+str(round(preds[0][0],3))+' fish:'+str(round(preds[0][1],3)))
+            plt.imshow(superimposed_img.astype(np.uint8));
+    if (save_path is not None) & (img_heatmap_separate==False): 
+        plt.savefig(save_path+'.png',dpi=300,format='png',bbox_inches='tight')
+    plt.show()    
     
     
+    
+##################### Intermediate activations
+def inter_activation(img, activation_model, layer_outputs, save_path=None, images_per_row=16):
+    #from below plus small modification
+    #https://github.com/fchollet/deep-learning-with-python-notebooks/blob/master/5.4-visualizing-what-convnets-learn.ipynb
+    # predict one one random input sample
+    #small example on noise
+    #img = np.random.rand(1, img_rows, img_cols, 3)
+    #activations = activation_model.predict([np.reshape(img,[1,img.shape[1],img.shape[2],3])])
+
+    activations = activation_model.predict([np.reshape(img,[1,img.shape[0],img.shape[1],3])])
+
+    #names of the layers for plot title
+    layer_names = []
+    for layer in layer_outputs:
+        layer_names.append(layer.name)
+
+    #plot feature maps
+    for layer_name, layer_activation in zip(layer_names, activations):
+
+        n_features = layer_activation.shape[-1] #nbr of channel/features in the feature map 
+        img_row = layer_activation.shape[1]
+        img_col = layer_activation.shape[2]
+        nbr_row = n_features // images_per_row #temps pis si cest pas un multiple de 16 on ne prendra pas en compte tout
+        display_grid = np.zeros((img_row * nbr_row, images_per_row * img_col))
+
+        #we'll tile each filter into this big horizontal grid
+        for r in range(nbr_row):
+            for c in range(images_per_row):
+                channel_image = layer_activation[0, :, :, r * images_per_row + c]
+                # Post-process the feature to make it visually palatable
+                channel_image -= channel_image.mean()
+                channel_image /= channel_image.std()
+                channel_image *= 64
+                channel_image += 128
+                channel_image = np.clip(channel_image, 0, 255).astype('uint8')
+                display_grid[r * img_row : (r + 1) * img_row,
+                             c * img_col : (c + 1) * img_col] = channel_image
+
+        #display the grid
+        scale = 1. / img_row
+        plt.figure(figsize=(scale * display_grid.shape[1],
+                            scale * display_grid.shape[0]))
+        plt.title(layer_name)
+        plt.grid(False)
+        plt.imshow(display_grid, aspect='auto', cmap='viridis')
+        plt.savefig(save_path+'_'+layer_name.split('/')[0]+'.png',dpi=300,format='png',bbox_inches='tight')    
+        plt.show()
+    
+##################### Filters    
+def deprocess_image(x):
+    # normalize tensor: center on 0., ensure std is 0.1
+    x -= x.mean()
+    x /= (x.std() + 1e-5)
+    x *= 0.1
+
+    # clip to [0, 1]
+    x += 0.5
+    x = np.clip(x, 0, 1)
+
+    # convert to RGB array
+    x *= 255
+    x = np.clip(x, 0, 255).astype('uint8')
+
+    return x
+
+def generate_pattern(layer_name, filter_index):
+    
+    layer_output = model.get_layer(layer_name).output
+    loss = K.mean(layer_output[:, :, :, filter_index]) #to be maximized, i.e. higher pixel mean 
+
+    #compute the gradient of the input picture wrt this loss
+    grads = K.gradients(loss, model.input)[0]
+
+    #normalize gradient: to ensures that the magnitude of the updates done to the input image is always 
+    #within a same range.
+    grads /= (K.sqrt(K.mean(K.square(grads))) + 1e-5)
+
+    #this function returns the loss and grads given the input picture
+    iterate = K.function([model.input], [loss, grads])
+    
+    #We start from a gray image with some noise
+    input_img_data = np.random.random((1, img_rows, img_cols, 3)) * 20 + 128.
+
+    #run gradient ascent for 40 steps
+    step = 1.
+    for i in range(40):
+        loss_value, grads_value = iterate([input_img_data])
+        input_img_data += grads_value * step 
+
+    img = input_img_data[0]
+    return deprocess_image(img)
+
+#small example
+#gen_img = generate_pattern(layer_name='block_15_project', filter_index=10)
+#plt.imshow(gen_img)
+#plt.show()    
     
