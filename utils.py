@@ -27,6 +27,14 @@ import re
 import fuzzysearch
 from fuzzysearch import find_near_matches
 
+#video
+import skvideo.io 
+#from skimage import color
+#import scipy.misc
+import moviepy
+from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
+from moviepy.editor import VideoFileClip, concatenate_videoclips
+
 #models
 from scipy import stats
 import sklearn
@@ -260,7 +268,7 @@ def from_path_scannpdf_book_2image(path, path_save, nbrp=2, plot_=0):
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
-#concatenate images 
+#concatenate images one next to the other (i.e. to make nicer plot)
 def concat_images(img1, img2, g=15):
     """ Combines two (colored or black and white) images ndarrays side-by-side """
     
@@ -332,10 +340,9 @@ def reduce_li_img(li):
         li_smaller.append(threeimg_to_1(h, w, li[i], li[i+1], li[i+2]))    
     return(li_smaller)
 
-#fct that construct one image from a list of images (one images as one channel, the first one is the 1st channel etc)
 def construct_image_3channels(li_images):
-    
-    #### check if its a power of 3, otherwise remove some imaegs to have a power of 3
+    '''fct that construct one image from a list of x images (one images as one channel, the first one is the 1st channel etc)'''
+    #### check if its a power of 3, otherwise remove some images to have a power of 3
     li_power3 = [np.power(3,x) for x in range(1,len(li_images))]
     l = max([x for x in li_power3 if x<=len(li_images)])
     li =  li_images[0:l]
@@ -348,10 +355,27 @@ def construct_image_3channels(li_images):
         
     return(li[0].astype(np.uint8))
 
+def construct_3image_3channels(li_images):
+    '''fct that construct one image from a list of 3 images (one images as one channel, the first one is the 1st channel etc)'''
+    
+    #convert images into black and white
+    li = [cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_BGR2GRAY) for img in li_images]
+    h = max([img.shape[0] for img in li])
+    w = max([img.shape[1] for img in li])
+    
+    #create a smaller list reducing each set of three images to one image
+    new_img = np.zeros(shape=(h, w, 3))
+    new_img[:,:,0] = li[0]
+    new_img[:,:,1] = li[1]
+    new_img[:,:,2] = li[2]
+
+    return(new_img.astype(np.uint8))
+
+
 ################################
 
-#from a binary bbox (i.e. true where the rectangle-mask is and false elsewhere, to x,y,w,h bbox
 def binary_bbox_to_bbox(binary_mask):
+    '''from a binary bbox (i.e. true where the rectangle-mask is and false elsewhere, to x,y,w,h bbox'''
     #first row with True: y1
     y1 = [i for i in range(len(binary_mask)) if True in binary_mask[i]][0]
     #last row with true: y2
@@ -824,6 +848,22 @@ class DataGenerator(keras.utils.Sequence):
 ########################################### other & old ###########################################
 ###################################################################################################
 
+#removes element from two lists based on the entry of the first one
+def lists_remove_in1(li1,li2,s):
+    #remove s until no more s
+    if s in li1:
+        ind = li1.index(s)
+        del li1[ind]
+        del li2[ind] 
+        return(lists_remove_in1(li1,li2,s))
+    else:
+        return(li1,li2)
+#small example
+#li1_, li2_ = lists_remove_in1(['MA', 'A', 'fhsgdf','MA'], [12,34,'s',46],'MA')
+#print(li1_)
+#print(li2_)
+
+
 #round to the closest number with base 5
 def myround(x, base=5):
     return int(base * round(float(x)/base))
@@ -1204,6 +1244,354 @@ def donut_plot(li_labels, li_sizes, path, min_val=None, v=0.3, nbr_without_explo
 ###################################################################################################
 ######################################### work with videos ########################################
 ###################################################################################################
+
+def remove_isolated_index(li, isol):
+    '''
+    function that takes a list of '0' and '1' entries and replace to much isolated '1' by '0'
+    ----li: list of '0' and '1' entries
+    ----isol: nbr of entries to the left and to the right which must be 1 in order to keep the particular entry to 1
+    note that in the case where we will replace one entry which should not have been replaced if we new the previous or next
+    value (outside from this list), it also means that it wont have any impact on the ones of the list, so no importance 
+    e.g. [...,1][0,1,0,0,0,1,0,0,1,1,1,0,0,0,1,0,0,0,...]'''
+    li_index = [i for i in range(len(li)) if ((sum(li[max(i-isol,0):i+isol+1])-li[i])>=1) & (li[i]==1)]
+    return([1 if i in li_index else 0 for i in range(len(li))])
+#small example
+#li = [0,1,1,0,0,0,0,0,0,0,1,0,0,0,0]
+#li = [0,1,1,0,0,0,0,1,0,0,1,0,0,0,1]
+#remove_isolated_index(li,3)
+
+#GPU. 1-7%, processeur: 40-50%, mémoire GPU dédié: 3,3/4, mémoire GPU partagé: 0,1/7,9
+#we will save the video to have a visual, but later the purpose is to save representative images of detected fish
+#sorted(li_video_paths, reverse=True)
+def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, img_cols, img_rows, batch_size, save_video=True,
+                      save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
+                      nbr_frames_ba=1, careful_index=1, img_end='.jpg', width=600, height=480, crf=10):
+    
+    '''    
+    ----path_initial_video: path to the video to reduce size
+    ----path_treated_info: path to the folder where the treated info will be saved, it will create an images and a videos folder
+    ----algo_name: string representing the name of the algo, to save the images and video produced thanks to this algo
+    ----model: model to use for fish detection.It must have been trained on 3 channels images created from 3 consecutives images
+    ----imgcols, img_rows: img dimension going with the model
+    ----batch_size: corresponding batchsize of the model
+    ----save_images_3in1: if True, it will save each images used as input in the algo, where a fish was detected with the 
+        certainty in the name, even if we did not used the image in the video (e.g. if the image was alone in the set of 
+        consecutives images). Hence, the purpose of these images is to understand better the waeknesses of the algorithme to 
+        help improvement, it may be usefull to retrain the fast algo on these images outputed from video without fish 
+    ----save_images_lonely: same as save_images_3in1 except that it will save the three consecutvies images instead of the 
+        3in1, it may be usefull to train the heavier algo on these images outputed from video without fish
+    ----save_video: if true, will save the video in purpose to give it to human or heavier algo (i.e. saving 3 images next to
+        prediction not saving when only one prediction in the next x frames, saving list of same size as nbr of frames saved, 
+        given the info of the exact time in the initial video)
+    ----save_full_video_with_text: if True, save_video must be True as well. In this case its asking to save the full video with
+        text 'fish'/'no_fish' on the frames. Otherwise, it will save the smaller video with no text but only part with
+        fish detections
+    ----nbr_frames_ba: number of set of 3frames to save in smaller video, next to the one where a fish was detected
+    ----careful_index: number of frames before and after that must have at least one other fish prediction to take into account 
+        the actual fish pred. If==0: we always count the fish pred, if =10: 10*3 frames before and 10*3 frames after must have 
+        at list one other fish prediction to save it. 
+    ----img_end: format to save images: png jpg...
+    ----width, height, crf: parameters given in the FFmpegWriter fct, parameter to save video properly
+    ----debug: if True (save_video must be true and save_full_video_with_text must be false) it will save all images used in 
+        smaller film for verification and all images from the initial video with their predictions
+    '''
+    
+    #start timer
+    start = time.time()
+    
+    #small test: are the parameters coherent?
+    if (save_video==False) & (save_full_video_with_text==True):
+        print('ERROR: you can not ask not to save video, but to save the full video with text')
+        sys.exit()
+        
+    #small test: does the impact of previous/next frames is possible with the actual batchsize?
+    #maximum number of previous and next frames we need to look at to decide weither we must save or not a particular frame
+    first_set_starting = max(careful_index, nbr_frames_ba)
+    if (first_set_starting*2+1) > batch_size:
+        print('max(careful_index*2,nbr_frames_ba) parameter must be smaller or equal to half of the batchsize')
+        sys.exit()
+        
+    #small test:  check if video exists
+    if len(glob.glob(path_initial_video))!=1:
+        print('the video does not exist at your path')
+        sys.exit()
+    
+    #create path to save images and create name of smaller video
+    path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_'+path_initial_video.split('\\')[-1].split('.')[0])
+    path_img_treated_3in1 = os.path.join(path_img_treated, '3in1')
+    path_img_treated_lonely = os.path.join(path_img_treated, 'lonely')
+    path_img_debuginit = os.path.join(path_img_treated, 'debug','init')
+    path_img_debugsaved = os.path.join(path_img_treated, 'debug','saved')
+    path_img_debugcorrectindex = os.path.join(path_img_treated, 'debug','correctindex')
+    path_vid_treated = os.path.join(path_treated_info, 'videos')
+    if not os.path.exists(path_img_treated_3in1):
+        os.makedirs(path_img_treated_3in1)
+    if not os.path.exists(path_img_treated_lonely):
+        os.makedirs(path_img_treated_lonely)
+    if not os.path.exists(path_img_debuginit):
+        os.makedirs(path_img_debuginit)
+    if not os.path.exists(path_img_debugsaved):
+        os.makedirs(path_img_debugsaved)
+    if not os.path.exists(path_img_debugcorrectindex):
+        os.makedirs(path_img_debugcorrectindex)
+    if not os.path.exists(path_vid_treated):
+        os.makedirs(path_vid_treated)
+
+    #read video and output info on the video
+    video = cv2.VideoCapture(path_initial_video)
+    fps = video.get(cv2.CAP_PROP_FPS)      
+    frameCount = video.get(cv2.CAP_PROP_FRAME_COUNT)
+    duration = int(frameCount)/(fps+0.00000001) #if empty video
+    minutes = int(duration/60)
+    seconds = duration%60
+    print('INITIAL VIDEO:  seconds=%d (=%dmin %dsec), fps=%d, number of frames=%d '%(duration,int(minutes),int(seconds),fps,
+                                                                                     int(frameCount)))
+    if fps==0:
+        return
+
+    #info
+    dico_classid_classname = {0:'no-fish', 1:'fish'}
+    dico_class_color = {'no-fish':(139, 0, 0), 'fish':(0, 139, 0)}
+
+    #define writer to save the annotated video
+    #take same nbr of fps as the initial video
+    writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, 
+                                                  'complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1]),
+                inputdict={'-r': str(fps), '-s':'{}x{}'.format(width,height)},
+                outputdict={'-r': str(fps), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast', '-pix_fmt':'yuvj420p'}
+    ) #yuv444p, crf=0:lossless: (no loss in compression) constant rate factor, '-vcodec': 'libx264': use the h.264 codec
+
+    #initialisation
+    #number of frames taken from video, might be bigger than the total available number of frames, if its not divisible by 
+    #batchsize
+    k = 0 
+    something_saved = False
+    pred_old = None
+    li_index_savedimg = []
+    li_sec_savedimg = []
+    nbr_to_let = 5
+    
+    #loop over frames from the video file stream
+    while True:
+
+        #grab the same nbr of images as the batchsize*3 (as it will then be reduced to a list of batchsize images)
+        li_images = []
+        for i in range(batch_size*3):
+            #take frames & check to see if we have reached the end of the video in which case we go out of the for loop
+            #but continue by adding necessary missing mages to have the expected batchsize nbr 
+            (grabbed, image) = video.read()
+            if not grabbed:
+                break    
+                print('break')
+            k = k+1
+            li_images.append(image)
+
+        ##################################################### detect fish #####################################################
+        #add images to complete batch
+        try:
+            if (batch_size*3)!=len(li_images):
+                li_images = li_images+[li_images[-1] for i in range(0,(batch_size*3)-len(li_images))]
+                #adapt k as well
+                print('instead of %d we will use %d'%(k,75*math.ceil(k/75)))
+                k = batch_size*3*math.ceil(k/(batch_size*3)) #round to the next highest multiple of 75
+
+            #construct one colored image from 3 consecutives images
+            li_img = [construct_3image_3channels(li_images[(i*3):(i*3+3)]) for i in range(batch_size)]
+            #detect fish (first put into adequate format)
+            images = [cv2.resize(img,(img_cols,img_rows),interpolation=cv2.INTER_CUBIC) for img in li_img]
+            images = [np.reshape(img,[1,img.shape[0],img.shape[1],3]) for img in images]
+            images = np.vstack(images)
+            pred = model.predict(images)
+            
+        except Exception as e:
+            print('ERROR in predictiong fish: ', e)
+            print(k)
+            print(len(li_images))
+            pred = None
+            sys.exit()
+        
+        ################################################ save smaller video #################################################
+        if (save_full_video_with_text==False) & (save_video):                   
+            
+            #if first iteration treat all within the first first_set_starting frames
+            #otherwise treat from first_set_starting to batch_size+first_set_starting using possibly all others value as well
+            if pred_old is None:
+                
+                #create list of class
+                li_pred_all = [np.argmax(pred[m]) for m in range(len(pred))]
+                #lets remove the 'fish' frames when they are isolated (i.e. with repsect to def of careful_index)
+                li_pred_all = remove_isolated_index(li_pred_all, careful_index)
+
+                #print(li_pred_all) #verified
+                #if last batch (i.e. when video has even less than ~batchsize*3 frames), then we must as well consider last 
+                #first_set_starting images for saving
+                until = first_set_starting
+                if k>=frameCount-nbr_to_let:
+                    until = len(li_pred_all)
+                #select the correct images to save
+                for p in range(0, until):
+                    if sum(li_pred_all[max(p-nbr_frames_ba,0):min(p+nbr_frames_ba+1,len(li_pred_all))])>0:
+                        #print('save:', p)
+                        writer.writeFrame(li_images[p*3])
+                        writer.writeFrame(li_images[p*3+1])
+                        writer.writeFrame(li_images[p*3+2])
+                        #print(k, p)
+                        k1 = k-(batch_size*3-(p*3+1))
+                        k2 = k-(batch_size*3-(p*3+2))
+                        k3 = k-(batch_size*3-(p*3+3))
+                        li_index_savedimg.extend([k1, k2, k3])
+                        li_sec_savedimg.extend([k1/fps, k2/fps, k3/fps])
+                        something_saved = True
+                        #save all images used in smaller film for verification
+                        if debug:
+                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(k1/fps,2))+img_end), 
+                                            li_images[p*3])                             
+                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k2)+'_'+str(round(k2/fps,2))+img_end), 
+                                            li_images[p*3+1])  
+                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(k3/fps,2))+img_end), 
+                                            li_images[p*3+2])                        
+            else:
+                li_all_images = li_images_old+li_images
+                pred_all = list(pred_old.copy())
+                pred_all.extend(list(pred))
+                #create list of class
+                li_pred_all = [np.argmax(pred_all[m]) for m in range(len(pred_all))]
+                #lets remove the 'fish' frames when they are isolated (i.e. with respect to def of careful_index)
+                li_pred_all = remove_isolated_index(li_pred_all, careful_index)
+
+                #small verification of size
+                if len(li_all_images)!=2*3*batch_size:
+                    print(len(li_all_images))
+                    print('ERROR: not enough data!')
+                    sys.exit()
+                    
+                #print(li_pred_all)  #verified
+                #select the correct images to save
+                #if last batch, then we must as well consider last first_set_starting images for saving
+                until = batch_size+first_set_starting
+                if k>=frameCount-nbr_to_let:
+                    until = len(li_pred_all)
+                    
+                for p in range(first_set_starting, until):
+                    if sum(li_pred_all[p-nbr_frames_ba:min(p+nbr_frames_ba+1,len(li_pred_all))])>0:
+                        #print('save:', p, k) 
+                        writer.writeFrame(li_all_images[p*3])
+                        writer.writeFrame(li_all_images[p*3+1])
+                        writer.writeFrame(li_all_images[p*3+2])
+                        k1 = k-(batch_size*3*2-(p*3+1))
+                        k2 = k-(batch_size*3*2-(p*3+2))
+                        k3 = k-(batch_size*3*2-(p*3+3))
+                        sec1 = k1/fps
+                        sec2 = k2/fps
+                        sec3 = k3/fps
+                        li_index_savedimg.extend([k1,k2,k3])
+                        li_sec_savedimg.extend([sec1, sec2, sec3])
+                        something_saved = True
+                        
+                        #save all images used in smaller film for verification
+                        if debug:
+                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(sec1,2))+img_end), 
+                                            li_all_images[p*3])                             
+                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k2)+'_'+str(round(sec2,2))+img_end), 
+                                            li_all_images[p*3+1])  
+                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(sec3,2))+img_end), 
+                                            li_all_images[p*3+2])
+                            
+        #################################### save images and full video with annotation #####################################
+        for i in range(len(li_img)):
+            
+            #find predictions output
+            pred_class = dico_classid_classname[np.argmax(pred[i])]
+            k1 = str(k-(len(li_img)-i)*3+1)
+            k2 = str(k-(len(li_img)-i)*3+2)
+            k3 = str(k-(len(li_img)-i)*3+3)
+            proba_t = str('-'.join([str(round(l,3)) for l in pred[i]]))
+            
+            #save the image used to detect fish (i.e. three images into one)
+            if (pred_class=='fish') & (save_images_3in1):
+                imageio.imwrite(os.path.join(path_img_treated_3in1, k1+'_'+ k2+'_'+ k3+'_P'+proba_t+img_end), li_img[i])
+            
+            if (pred_class=='fish') & (save_images_lonely):
+                imageio.imwrite(os.path.join(path_img_treated_lonely, k1+'_P'+proba_t+img_end), li_images[i*3])                   
+                imageio.imwrite(os.path.join(path_img_treated_lonely, k2+'_P'+proba_t+img_end), li_images[i*3+1])   
+                imageio.imwrite(os.path.join(path_img_treated_lonely, k3+'_P'+proba_t+img_end), li_images[i*3+2])   
+            
+            #save absolutely all images one by one for verification (specifically for smaller video creation)
+            if debug:
+                imageio.imwrite(os.path.join(path_img_debuginit, k1+'_P'+proba_t+img_end), li_images[i*3])                   
+                imageio.imwrite(os.path.join(path_img_debuginit, k2+'_P'+proba_t+img_end), li_images[i*3+1])   
+                imageio.imwrite(os.path.join(path_img_debuginit, k3+'_P'+proba_t+img_end), li_images[i*3+2])   
+                
+            #save the complete video with text
+            if save_full_video_with_text & save_video:
+                #add text: add fish/nofish class on image
+                cv2.putText(li_images[i*3], pred_class, (150,155), cv2.FONT_HERSHEY_SIMPLEX, 1, 
+                            dico_class_color[pred_class], 1, cv2.LINE_AA)
+                cv2.putText(li_images[i*3+1], pred_class, (150,155), cv2.FONT_HERSHEY_SIMPLEX, 1, 
+                            dico_class_color[pred_class], 1, cv2.LINE_AA)
+                cv2.putText(li_images[i*3+2], pred_class, (150,155), cv2.FONT_HERSHEY_SIMPLEX, 1, 
+                            dico_class_color[pred_class], 1, cv2.LINE_AA)
+                #add frame to video
+                writer.writeFrame(li_images[i*3])
+                writer.writeFrame(li_images[i*3+1])
+                writer.writeFrame(li_images[i*3+2])
+                something_saved = True 
+
+        ###################################### stop or continue loop, save old info ######################################
+        #does not worth looking again into the last few frames as it will add some images to attain batchsize
+        if k>=frameCount-nbr_to_let:            
+            #go out of the while loop
+            break
+            
+        #keep in memory the predictions & the original list of images in case we need to save some due to fish detection in the
+        #next batch note that as the text happen only when we save the full video, in which case we wont use the old list
+        pred_old = pred.copy()
+        li_images_old = li_images.copy()
+           
+    #close videos
+    try:
+        if something_saved:
+            writer.close()
+        else:
+            print('empty video, no video saved')
+    except Exception as e:
+        print('ERROR: in closing the video: ', e)
+
+    end = time.time()
+    sec = end-start
+    print('--> video analysed during %.2f percent of its total time (total running time: %.2fmin)'%(sec/duration*100,sec/60))
+    
+    #give info on smaller video if it was asked to save the smaller video
+    if (save_full_video_with_text==False) & (save_video): 
+        smaller_video = cv2.VideoCapture(os.path.join(path_vid_treated, 
+                                                      'complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1]))
+        fps = smaller_video.get(cv2.CAP_PROP_FPS)      
+        frameCount = int(smaller_video.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration2 = frameCount/(fps+0.000001)
+        minutes = int(duration2/60)
+        seconds = duration2%60
+        print('SMALLER VIDEO:  seconds=%d (=%dmin %dsec), fps=%d, number of frames=%d '%(duration2,int(minutes),int(seconds),
+                                                                                         fps,frameCount))
+        print('--> it lasts %d percent of the total time of the initial one'%(duration2/duration*100))
+    print('------------Finish \n')
+    #save seconds of saved frames
+    pickle.dump(li_index_savedimg, open(os.path.join(path_vid_treated,
+                'li_index_savedimg_complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+    pickle.dump(li_sec_savedimg, open(os.path.join(path_vid_treated,
+                'li_sec_savedimg_complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+
+    if debug:
+        video = cv2.VideoCapture(path_initial_video)
+        k = 0 #number of frames taken from video
+        while True:
+            (grabbed, image) = video.read()
+            if not grabbed:
+                break    
+            k = k+1
+            imageio.imwrite(os.path.join(path_img_debugcorrectindex, str(k)+img_end), image)                   
+
+
+
 #from a video save the most dissimilar images and several cosnecutively
 def create_1dissimilar_consecutive_frames(video_path, video_name, path_save_images, image_name_init='', 
                                           nbr_consec=12, video_change_to_file=None):
@@ -1768,6 +2156,8 @@ def random_forest_classifier_parameter_tunning(df, targetnames, varnames = None)
 
     return sorted_importance_featnames, sorted_importances, sorted_importance_std
 
+
+
 ###################################################################################################
 ################################## plot for deep learning models ##################################
 ###################################################################################################
@@ -1924,7 +2314,7 @@ def deprocess_image(x):
 
     return x
 
-def generate_pattern(layer_name, filter_index):
+def generate_pattern(layer_name, filter_index, model, img_rows, img_cols):
     
     layer_output = model.get_layer(layer_name).output
     loss = K.mean(layer_output[:, :, :, filter_index]) #to be maximized, i.e. higher pixel mean 
@@ -1950,9 +2340,10 @@ def generate_pattern(layer_name, filter_index):
 
     img = input_img_data[0]
     return deprocess_image(img)
-
 #small example
 #gen_img = generate_pattern(layer_name='block_15_project', filter_index=10)
 #plt.imshow(gen_img)
 #plt.show()    
+    
+    
     
