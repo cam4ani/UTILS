@@ -1266,7 +1266,8 @@ def remove_isolated_index(li, isol):
 #sorted(li_video_paths, reverse=True)
 def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, img_cols, img_rows, batch_size, save_video=True,
                       save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
-                      nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, img_end='.jpg', width=600, height=480, crf=10):
+                      save_images_lonely_fromsmallervid=False, nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, 
+                      img_end='.jpg', width=600, height=480, crf=10):
     
     '''    
     ----path_initial_video: path to the video to reduce size
@@ -1281,6 +1282,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
         help improvement, it may be usefull to retrain the fast algo on these images outputed from video without fish 
     ----save_images_lonely: same as save_images_3in1 except that it will save the three consecutvies images instead of the 
         3in1, it may be usefull to train the heavier algo on these images outputed from video without fish
+    ----save_images_lonely_fromsmallervid: if true, save same images as in smalelr video
     ----save_video: if true, will save the video in purpose to give it to human or heavier algo (i.e. saving 3 images next to
         prediction not saving when only one prediction in the next x frames, saving list of same size as nbr of frames saved, 
         given the info of the exact time in the initial video)
@@ -1320,6 +1322,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     #create path to save images and create name of smaller video
     path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_'+path_initial_video.split('\\')[-1].split('.')[0])
     path_img_treated_3in1 = os.path.join(path_img_treated, '3in1')
+    path_img_treated_fsv = os.path.join(path_img_treated, 'image_from_smaller_video')
     path_img_treated_lonely = os.path.join(path_img_treated, 'lonely')
     path_img_debuginit = os.path.join(path_img_treated, 'debug','init')
     path_img_debugsaved = os.path.join(path_img_treated, 'debug','saved')
@@ -1327,6 +1330,8 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     path_vid_treated = os.path.join(path_treated_info, 'videos')
     if not os.path.exists(path_img_treated_3in1):
         os.makedirs(path_img_treated_3in1)
+    if not os.path.exists(path_img_treated_fsv):
+        os.makedirs(path_img_treated_fsv)
     if not os.path.exists(path_img_treated_lonely):
         os.makedirs(path_img_treated_lonely)
     if not os.path.exists(path_img_debuginit):
@@ -1353,6 +1358,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     #info
     dico_classid_classname = {0:'no-fish', 1:'fish'}
     dico_class_color = {'no-fish':(139, 0, 0), 'fish':(0, 139, 0)}
+    vid_name = path_initial_video.split('\\')[-1][:-4]
 
     #define writer to save the annotated video
     #take same nbr of fps as the initial video
@@ -1449,6 +1455,16 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                             li_index_savedimg.extend([k1, k2, k3])
                             li_sec_savedimg.extend([k1/fps, k2/fps, k3/fps])
                             something_saved = True
+                            
+                            #save all images used in smaller film for treatement
+                            if save_images_lonely_fromsmallervid:
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k1)+'_'+str(round(k1/fps,2))+vid_name+img_end), 
+                                                li_images[p*3])                             
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k2)+'_'+str(round(k2/fps,2))+vid_name+img_end), 
+                                                li_images[p*3+1])  
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k3)+'_'+str(round(k3/fps,2))+vid_name+img_end), 
+                                                li_images[p*3+2])     
+                            
                             #save all images used in smaller film for verification
                             if debug:
                                 imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(k1/fps,2))+img_end), 
@@ -1497,6 +1513,15 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                             li_sec_savedimg.extend([sec1, sec2, sec3])
                             something_saved = True
 
+                            #save all images used in smaller film for treatment
+                            if save_images_lonely_fromsmallervid:
+                                imageio.imwrite(os.path.join(path_img_treated_fsv,str(k1)+'_'+str(round(sec1,2))+vid_name+img_end), 
+                                                li_all_images[p*3])                             
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k2)+'_'+str(round(sec2,2))+vid_name+img_end), 
+                                                li_all_images[p*3+1])  
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k3)+'_'+str(round(sec3,2))+vid_name+img_end), 
+                                                li_all_images[p*3+2])
+                                
                             #save all images used in smaller film for verification
                             if debug:
                                 imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(sec1,2))+img_end), 
@@ -1505,7 +1530,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                                                 li_all_images[p*3+1])  
                                 imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(sec3,2))+img_end), 
                                                 li_all_images[p*3+2])
-                            
+                                
         #################################### save images and full video with annotation #####################################
         for i in range(len(li_img)):
             
