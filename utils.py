@@ -1266,7 +1266,7 @@ def remove_isolated_index(li, isol):
 #sorted(li_video_paths, reverse=True)
 def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, img_cols, img_rows, batch_size, save_video=True,
                       save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
-                      nbr_frames_ba=1, careful_index=1, img_end='.jpg', width=600, height=480, crf=10):
+                      nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, img_end='.jpg', width=600, height=480, crf=10):
     
     '''    
     ----path_initial_video: path to the video to reduce size
@@ -1277,7 +1277,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     ----batch_size: corresponding batchsize of the model
     ----save_images_3in1: if True, it will save each images used as input in the algo, where a fish was detected with the 
         certainty in the name, even if we did not used the image in the video (e.g. if the image was alone in the set of 
-        consecutives images). Hence, the purpose of these images is to understand better the waeknesses of the algorithme to 
+        consecutives images). Hence, the purpose of these images is to understand better the weakness of the algorithme to 
         help improvement, it may be usefull to retrain the fast algo on these images outputed from video without fish 
     ----save_images_lonely: same as save_images_3in1 except that it will save the three consecutvies images instead of the 
         3in1, it may be usefull to train the heavier algo on these images outputed from video without fish
@@ -1358,10 +1358,12 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     #take same nbr of fps as the initial video
     writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, 
                                                   'complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1]),
-                inputdict={'-r': str(fps), '-s':'{}x{}'.format(width,height)},
-                outputdict={'-r': str(fps), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast', '-pix_fmt':'yuvj420p'}
+                inputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-s':'{}x{}'.format(width,height)},
+                outputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast', '-pix_fmt':'yuvj420p'}
     ) #yuv444p, crf=0:lossless: (no loss in compression) constant rate factor, '-vcodec': 'libx264': use the h.264 codec
-
+    #when changing fps only of outputdict, it will remove or add some frames of the final video, bt keep the exact same time!!
+    #hence change both if you want to accelerate or deccelerate
+    
     #initialisation
     #number of frames taken from video, might be bigger than the total available number of frames, if its not divisible by 
     #batchsize
@@ -1385,6 +1387,8 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                 break    
                 print('break')
             k = k+1
+            b,g,r = cv2.split(image)          
+            image = cv2.merge([r,g,b])
             li_images.append(image)
 
         ##################################################### detect fish #####################################################
@@ -1432,25 +1436,27 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                 #select the correct images to save
                 for p in range(0, until):
                     if sum(li_pred_all[max(p-nbr_frames_ba,0):min(p+nbr_frames_ba+1,len(li_pred_all))])>0:
-                        #print('save:', p)
-                        writer.writeFrame(li_images[p*3])
-                        writer.writeFrame(li_images[p*3+1])
-                        writer.writeFrame(li_images[p*3+2])
-                        #print(k, p)
                         k1 = k-(batch_size*3-(p*3+1))
                         k2 = k-(batch_size*3-(p*3+2))
                         k3 = k-(batch_size*3-(p*3+3))
-                        li_index_savedimg.extend([k1, k2, k3])
-                        li_sec_savedimg.extend([k1/fps, k2/fps, k3/fps])
-                        something_saved = True
-                        #save all images used in smaller film for verification
-                        if debug:
-                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(k1/fps,2))+img_end), 
-                                            li_images[p*3])                             
-                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k2)+'_'+str(round(k2/fps,2))+img_end), 
-                                            li_images[p*3+1])  
-                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(k3/fps,2))+img_end), 
-                                            li_images[p*3+2])                        
+                        #wont save last duplicate images!
+                        if k1<frameCount:
+                            #print('save:', p)
+                            writer.writeFrame(li_images[p*3])
+                            writer.writeFrame(li_images[p*3+1])
+                            writer.writeFrame(li_images[p*3+2])
+                            #print(k, p)
+                            li_index_savedimg.extend([k1, k2, k3])
+                            li_sec_savedimg.extend([k1/fps, k2/fps, k3/fps])
+                            something_saved = True
+                            #save all images used in smaller film for verification
+                            if debug:
+                                imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(k1/fps,2))+img_end), 
+                                                li_images[p*3])                             
+                                imageio.imwrite(os.path.join(path_img_debugsaved, str(k2)+'_'+str(round(k2/fps,2))+img_end), 
+                                                li_images[p*3+1])  
+                                imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(k3/fps,2))+img_end), 
+                                                li_images[p*3+2])                        
             else:
                 li_all_images = li_images_old+li_images
                 pred_all = list(pred_old.copy())
@@ -1476,27 +1482,29 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                 for p in range(first_set_starting, until):
                     if sum(li_pred_all[p-nbr_frames_ba:min(p+nbr_frames_ba+1,len(li_pred_all))])>0:
                         #print('save:', p, k) 
-                        writer.writeFrame(li_all_images[p*3])
-                        writer.writeFrame(li_all_images[p*3+1])
-                        writer.writeFrame(li_all_images[p*3+2])
                         k1 = k-(batch_size*3*2-(p*3+1))
                         k2 = k-(batch_size*3*2-(p*3+2))
                         k3 = k-(batch_size*3*2-(p*3+3))
-                        sec1 = k1/fps
-                        sec2 = k2/fps
-                        sec3 = k3/fps
-                        li_index_savedimg.extend([k1,k2,k3])
-                        li_sec_savedimg.extend([sec1, sec2, sec3])
-                        something_saved = True
-                        
-                        #save all images used in smaller film for verification
-                        if debug:
-                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(sec1,2))+img_end), 
-                                            li_all_images[p*3])                             
-                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k2)+'_'+str(round(sec2,2))+img_end), 
-                                            li_all_images[p*3+1])  
-                            imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(sec3,2))+img_end), 
-                                            li_all_images[p*3+2])
+                        #wont save last duplicate images!
+                        if k1<frameCount:
+                            writer.writeFrame(li_all_images[p*3])
+                            writer.writeFrame(li_all_images[p*3+1])
+                            writer.writeFrame(li_all_images[p*3+2])
+                            sec1 = k1/fps
+                            sec2 = k2/fps
+                            sec3 = k3/fps
+                            li_index_savedimg.extend([k1,k2,k3])
+                            li_sec_savedimg.extend([sec1, sec2, sec3])
+                            something_saved = True
+
+                            #save all images used in smaller film for verification
+                            if debug:
+                                imageio.imwrite(os.path.join(path_img_debugsaved, str(k1)+'_'+str(round(sec1,2))+img_end), 
+                                                li_all_images[p*3])                             
+                                imageio.imwrite(os.path.join(path_img_debugsaved, str(k2)+'_'+str(round(sec2,2))+img_end), 
+                                                li_all_images[p*3+1])  
+                                imageio.imwrite(os.path.join(path_img_debugsaved, str(k3)+'_'+str(round(sec3,2))+img_end), 
+                                                li_all_images[p*3+2])
                             
         #################################### save images and full video with annotation #####################################
         for i in range(len(li_img)):
@@ -1519,9 +1527,9 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
             
             #save absolutely all images one by one for verification (specifically for smaller video creation)
             if debug:
-                imageio.imwrite(os.path.join(path_img_debuginit, k1+'_P'+proba_t+img_end), li_images[i*3])                   
-                imageio.imwrite(os.path.join(path_img_debuginit, k2+'_P'+proba_t+img_end), li_images[i*3+1])   
-                imageio.imwrite(os.path.join(path_img_debuginit, k3+'_P'+proba_t+img_end), li_images[i*3+2])   
+                imageio.imwrite(os.path.join(path_img_debuginit, k1+'_'+pred_class+proba_t+img_end), li_images[i*3])                   
+                imageio.imwrite(os.path.join(path_img_debuginit, k2+'_'+pred_class+proba_t+img_end), li_images[i*3+1])   
+                imageio.imwrite(os.path.join(path_img_debuginit, k3+'_'+pred_class+proba_t+img_end), li_images[i*3+2])   
                 
             #save the complete video with text
             if save_full_video_with_text & save_video:
