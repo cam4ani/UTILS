@@ -1264,8 +1264,8 @@ def remove_isolated_index(li, isol):
 #GPU. 1-7%, processeur: 40-50%, mémoire GPU dédié: 3,3/4, mémoire GPU partagé: 0,1/7,9
 #we will save the video to have a visual, but later the purpose is to save representative images of detected fish
 #sorted(li_video_paths, reverse=True)
-def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, img_cols, img_rows, batch_size, save_video=True,
-                      save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
+def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, img_cols, img_rows, batch_size, path_img_treated_fsv, 
+                      save_video=True, save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
                       save_images_lonely_fromsmallervid=False, nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, 
                       img_end='.jpg', width=600, height=480, crf=10):
     
@@ -1276,6 +1276,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     ----model: model to use for fish detection.It must have been trained on 3 channels images created from 3 consecutives images
     ----imgcols, img_rows: img dimension going with the model
     ----batch_size: corresponding batchsize of the model
+    ----path_img_treated_fsv: path to save all images from smaller video (will be used if save_images_lonely_fromsmallervid==True)
     ----save_images_3in1: if True, it will save each images used as input in the algo, where a fish was detected with the 
         certainty in the name, even if we did not used the image in the video (e.g. if the image was alone in the set of 
         consecutives images). Hence, the purpose of these images is to understand better the weakness of the algorithme to 
@@ -1322,7 +1323,6 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     #create path to save images and create name of smaller video
     path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_'+path_initial_video.split('\\')[-1].split('.')[0])
     path_img_treated_3in1 = os.path.join(path_img_treated, '3in1')
-    path_img_treated_fsv = os.path.join(path_img_treated, 'image_from_smaller_video')
     path_img_treated_lonely = os.path.join(path_img_treated, 'lonely')
     path_img_debuginit = os.path.join(path_img_treated, 'debug','init')
     path_img_debugsaved = os.path.join(path_img_treated, 'debug','saved')
@@ -1330,8 +1330,6 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     path_vid_treated = os.path.join(path_treated_info, 'videos')
     if not os.path.exists(path_img_treated_3in1):
         os.makedirs(path_img_treated_3in1)
-    if not os.path.exists(path_img_treated_fsv):
-        os.makedirs(path_img_treated_fsv)
     if not os.path.exists(path_img_treated_lonely):
         os.makedirs(path_img_treated_lonely)
     if not os.path.exists(path_img_debuginit):
@@ -1342,7 +1340,8 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
         os.makedirs(path_img_debugcorrectindex)
     if not os.path.exists(path_vid_treated):
         os.makedirs(path_vid_treated)
-
+    if not os.path.exists(path_img_treated_fsv):
+        os.makedirs(path_img_treated_fsv)
     #read video and output info on the video
     video = cv2.VideoCapture(path_initial_video)
     fps = video.get(cv2.CAP_PROP_FPS)      
@@ -1456,14 +1455,14 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                             li_sec_savedimg.extend([k1/fps, k2/fps, k3/fps])
                             something_saved = True
                             
-                            #save all images used in smaller film for treatement
+                            #save all images used in smaller film for treatement (one over three)
                             if save_images_lonely_fromsmallervid:
-                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k1)+'_'+str(round(k1/fps,2))+vid_name+img_end), 
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k1)+'_'+str(round(k1/fps,2))+img_end), 
                                                 li_images[p*3])                             
-                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k2)+'_'+str(round(k2/fps,2))+vid_name+img_end), 
-                                                li_images[p*3+1])  
-                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k3)+'_'+str(round(k3/fps,2))+vid_name+img_end), 
-                                                li_images[p*3+2])     
+                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k2)+'_'+str(round(k2/fps,2))+img_end), 
+                                #                li_images[p*3+1])  
+                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k3)+'_'+str(round(k3/fps,2))+img_end), 
+                                #                li_images[p*3+2])     
                             
                             #save all images used in smaller film for verification
                             if debug:
@@ -1513,14 +1512,14 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                             li_sec_savedimg.extend([sec1, sec2, sec3])
                             something_saved = True
 
-                            #save all images used in smaller film for treatment
+                            #save all images used in smaller film for treatment (one over three)
                             if save_images_lonely_fromsmallervid:
-                                imageio.imwrite(os.path.join(path_img_treated_fsv,str(k1)+'_'+str(round(sec1,2))+vid_name+img_end), 
+                                imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k1)+'_'+str(round(sec1,2))+img_end), 
                                                 li_all_images[p*3])                             
-                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k2)+'_'+str(round(sec2,2))+vid_name+img_end), 
-                                                li_all_images[p*3+1])  
-                                imageio.imwrite(os.path.join(path_img_treated_fsv, str(k3)+'_'+str(round(sec3,2))+vid_name+img_end), 
-                                                li_all_images[p*3+2])
+                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k2)+'_'+str(round(sec2,2))+img_end), 
+                                #                li_all_images[p*3+1])  
+                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k3)+'_'+str(round(sec3,2))+img_end), 
+                                #                li_all_images[p*3+2])
                                 
                             #save all images used in smaller film for verification
                             if debug:
