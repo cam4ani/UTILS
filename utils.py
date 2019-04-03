@@ -1321,7 +1321,8 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
         sys.exit()
     
     #create path to save images and create name of smaller video
-    path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_'+path_initial_video.split('\\')[-1].split('.')[0])
+    path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_c'+str(careful_index)+'n'+str(nbr_frames_ba)+'p'+str(perc_fps_2remove)) 
+    #+path_initial_video.split('\\')[-1].split('.')[0]
     path_img_treated_3in1 = os.path.join(path_img_treated, '3in1')
     path_img_treated_lonely = os.path.join(path_img_treated, 'lonely')
     path_img_debuginit = os.path.join(path_img_treated, 'debug','init')
@@ -1359,13 +1360,12 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     dico_class_color = {'no-fish':(139, 0, 0), 'fish':(0, 139, 0)}
     vid_name = path_initial_video.split('\\')[-1][:-4]
 
-    #define writer to save the annotated video
-    #take same nbr of fps as the initial video
-    writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, 
-                                                  'complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1]),
+    #define writer to save the annotated video. take same nbr of fps as the initial video
+    writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, algo_name+'_'+path_initial_video.split('\\')[-1]),
                 inputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-s':'{}x{}'.format(width,height)},
-                outputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast', '-pix_fmt':'yuvj420p'}
-    ) #yuv444p, crf=0:lossless: (no loss in compression) constant rate factor, '-vcodec': 'libx264': use the h.264 codec
+                outputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast',
+                            '-pix_fmt':'yuvj420p'}) 
+    #yuv444p, crf=0:lossless: (no loss in compression) constant rate factor, '-vcodec': 'libx264': use the h.264 codec
     #when changing fps only of outputdict, it will remove or add some frames of the final video, bt keep the exact same time!!
     #hence change both if you want to accelerate or deccelerate
     
@@ -1459,10 +1459,6 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                             if save_images_lonely_fromsmallervid:
                                 imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k1)+'_'+str(round(k1/fps,2))+img_end), 
                                                 li_images[p*3])                             
-                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k2)+'_'+str(round(k2/fps,2))+img_end), 
-                                #                li_images[p*3+1])  
-                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k3)+'_'+str(round(k3/fps,2))+img_end), 
-                                #                li_images[p*3+2])     
                             
                             #save all images used in smaller film for verification
                             if debug:
@@ -1516,10 +1512,6 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
                             if save_images_lonely_fromsmallervid:
                                 imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k1)+'_'+str(round(sec1,2))+img_end), 
                                                 li_all_images[p*3])                             
-                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k2)+'_'+str(round(sec2,2))+img_end), 
-                                #                li_all_images[p*3+1])  
-                                #imageio.imwrite(os.path.join(path_img_treated_fsv, vid_name+str(k3)+'_'+str(round(sec3,2))+img_end), 
-                                #                li_all_images[p*3+2])
                                 
                             #save all images used in smaller film for verification
                             if debug:
@@ -1596,8 +1588,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     
     #give info on smaller video if it was asked to save the smaller video
     if (save_full_video_with_text==False) & (save_video): 
-        smaller_video = cv2.VideoCapture(os.path.join(path_vid_treated, 
-                                                      'complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1]))
+        smaller_video = cv2.VideoCapture(os.path.join(path_vid_treated, algo_name+'_'+path_initial_video.split('\\')[-1]))
         fps = smaller_video.get(cv2.CAP_PROP_FPS)      
         frameCount = int(smaller_video.get(cv2.CAP_PROP_FRAME_COUNT))
         duration2 = frameCount/(fps+0.000001)
@@ -1609,9 +1600,9 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     print('------------Finish \n')
     #save seconds of saved frames
     pickle.dump(li_index_savedimg, open(os.path.join(path_vid_treated,
-                'li_index_savedimg_complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+                'li_index_savedimg_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
     pickle.dump(li_sec_savedimg, open(os.path.join(path_vid_treated,
-                'li_sec_savedimg_complexer_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+                'li_sec_savedimg_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
 
     if debug:
         video = cv2.VideoCapture(path_initial_video)
