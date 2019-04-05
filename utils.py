@@ -1359,9 +1359,12 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     dico_classid_classname = {0:'no-fish', 1:'fish'}
     dico_class_color = {'no-fish':(139, 0, 0), 'fish':(0, 139, 0)}
     vid_name = path_initial_video.split('\\')[-1][:-4]
-
+        
     #define writer to save the annotated video. take same nbr of fps as the initial video
-    writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, algo_name+'_'+path_initial_video.split('\\')[-1]),
+    t_vid = 'smaller_video_'
+    if save_full_video_with_text==True:
+        t_vid = 'full_video_with_text_'
+    writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, t_vid+algo_name+'_'+path_initial_video.split('\\')[-1]),
                 inputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-s':'{}x{}'.format(width,height)},
                 outputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast',
                             '-pix_fmt':'yuvj420p'}) 
@@ -1386,7 +1389,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
         li_images = []
         for i in range(batch_size*3):
             #take frames & check to see if we have reached the end of the video in which case we go out of the for loop
-            #but continue by adding necessary missing mages to have the expected batchsize nbr 
+            #but continue by adding necessary missing images to have the expected batchsize nbr 
             (grabbed, image) = video.read()
             if not grabbed:
                 break    
@@ -1588,7 +1591,7 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     
     #give info on smaller video if it was asked to save the smaller video
     if (save_full_video_with_text==False) & (save_video): 
-        smaller_video = cv2.VideoCapture(os.path.join(path_vid_treated, algo_name+'_'+path_initial_video.split('\\')[-1]))
+        smaller_video = cv2.VideoCapture(os.path.join(path_vid_treated, t_vid+algo_name+'_'+path_initial_video.split('\\')[-1]))
         fps = smaller_video.get(cv2.CAP_PROP_FPS)      
         frameCount = int(smaller_video.get(cv2.CAP_PROP_FRAME_COUNT))
         duration2 = frameCount/(fps+0.000001)
@@ -1600,9 +1603,9 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     print('------------Finish \n')
     #save seconds of saved frames
     pickle.dump(li_index_savedimg, open(os.path.join(path_vid_treated,
-                'li_index_savedimg_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+                'li_index_savedimg_'+t_vid+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
     pickle.dump(li_sec_savedimg, open(os.path.join(path_vid_treated,
-                'li_sec_savedimg_'+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+                'li_sec_savedimg_'+t_vid+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
 
     if debug:
         video = cv2.VideoCapture(path_initial_video)
@@ -1916,12 +1919,71 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
         df = pd.DataFrame(li_annotation_info)
         df.to_csv(os.path.join(path_save_images, 'annotation_info.csv'), index=False, sep=';')
     
+def side_line(X_LINE, x, w):
+    if (X_LINE>=x) & (X_LINE<=x+w):
+        return('m')
+    elif X_line<x:
+        return('l')
+    else:
+        return('r')
     
+#TODO: modify computation of side when line is not in middle    
+#rules that say if an object has passed the vertical line
+def is_passed(dico0_id_bboxes_mask, id_, x2, y2, w2, h2, X_LINE):
+    '''given the old bboxes with their id and the new id with its bbox, and the line to take into account, it will \
+    output if the object has passed and if yes, in which direction'''
+    #if new object then it did not passed the line. otherwise, it pass if side1 in r,m & side2=l ; or; side1 in l,m & side2=r
+    if id_ in dico0_id_bboxes_mask.keys():
+        return(False,None)
+    else:
+        (x1,y1,w1,h1),mask = dico0_id_bboxes_mask[id_]
+        side1 = side_line(X_LINE, x1, w1)
+        side2 = side_line(X_LINE, x2, w2)
+        if side1 in ['r','m'] & side2=='l':
+            return(True,'r2l')
+        elif side1 in ['l','m'] & side2=='r':
+            return(True,'l2r')
+        else:
+            return(False,None)
+    
+#given an old dico-result and the new dico_id_bboxes with the X_LINE from which we need to count object, it will
+#update the dico-results of the form:
+#results = {'object_count':5,
+#           'frame_count':1,
+#           'dico_last_objects':{}}#{1:(61, 326, 175, 84), 2:(415, 145, 129, 87)}}    
+def update_results(results, dico0_id_bboxes_mask, dico_id_bboxes_mask, X_LINE, nbr_frames=10):
+    
+    #update number of frames saw
+    results['frame_count'] = results['frame_count'] + 1
+    
+    #update the objects count
+    nbr_new_obj = len([i for i in list(dico_id_bboxes_mask.keys()) if i not in list(results['dico_last_objects'].keys())])
+    results['object_count'] = results['object_count'] + nbr_new_obj
+    
+    #update the last saw objects
+    results['dico_last_objects'] = dico_id_bboxes_mask
+    
+    #see if an object has passed, and if yes update values
+    for id_, ((x2,y2,w2,h2),mask) in dico_id_bboxes_mask.items():
+        has_passed, direction = is_passed(dico0_id_bboxes_mask, id_, x2, y2, w2, h2, X_LINE)
+        if has_passed:
+            if direction=='r2l':
+                results['li_id_passed_object_r2l'].append(id_)
+                results['li_id_passed_object_r2l'] = list(set(results['li_id_passed_object_r2l']))
+                results['object_pass_r2l'] = len(results['li_id_passed_object_r2l'])
+            if direction=='l2r':
+                results['li_id_passed_object_l2r'].append(id_)
+                results['li_id_passed_object_l2r'] = list(set(results['li_id_passed_object_l2r']))
+                results['object_pass_l2r'] = len(results['li_id_passed_object_l2r'])
+            
+    return(results)  
+
+
 #from an initial dictionary of ids-object with their corresponding bbox it output a dico with the new ids& associated bboxes
 #max_used_id: bigger object id already used
 def simple_bbox_tracker(dico0_id_bboxes_mask, li_t_bboxes_mask, max_used_id, smaller_dist=100):
     
-    #TODO: if two new object has the same id
+    #TODO: if two new objects has the same id
         
     #if no old object return the new object with new ids
     if len(dico0_id_bboxes_mask)==0:
@@ -1932,7 +1994,7 @@ def simple_bbox_tracker(dico0_id_bboxes_mask, li_t_bboxes_mask, max_used_id, sma
     
     #initialise
     dico_id_bboxes_mask = {}
-    
+        
     #pass through each new object
     for new_object, mask in li_t_bboxes_mask:
         
@@ -1951,40 +2013,14 @@ def simple_bbox_tracker(dico0_id_bboxes_mask, li_t_bboxes_mask, max_used_id, sma
         else:
             max_used_id = max_used_id+1
             dico_id_bboxes_mask[max_used_id] = (new_object, mask)
+               
+    return(dico_id_bboxes_mask)
     
-    return dico_id_bboxes_mask
     
-#givn an old dico-result and the new dico_id_bboxes with the X_LINE from which we need to count object, it will
-#update the dico-results of the form:
-#results = {'object_count':5,
-#           'frame_count':1,
-#           'dico_last_objects':{}}#{1:(61, 326, 175, 84), 2:(415, 145, 129, 87)}}
-def update_results(results, dico_id_bboxes_mask, X_LINE):
     
-    #update number of frames saw
-    results['frame_count'] = results['frame_count']+1
-    
-    #update the objects count
-    nbr_new_obj = len([i for i in list(dico_id_bboxes_mask.keys()) if i not in list(results['dico_last_objects'].keys())])
-    results['object_count'] = results['object_count']+nbr_new_obj
-    
-    #update the last saw objects
-    results['dico_last_objects'] = dico_id_bboxes_mask
-    
-    #see if an object pass the line
-    for id_, (bbox,mask) in dico_id_bboxes_mask.items():
-        x,y,w,h = bbox
-        xline = x+w*0.95
-        if xline>X_LINE:
-            results['li_id_passed_object'].append(id_)
-            results['li_id_passed_object'] = list(set(results['li_id_passed_object']))
-            results['object_pass'] = len(results['li_id_passed_object'])
-            
-    return results    
-  
 #return the image with the (not several) mask on it   
 #color must be a tuple with integer from 0 to 255
-def apply_mask(image, mask, color, alpha=0.5):
+def apply_mask(image, mask, color=(0,170,0), alpha=0.5):
     """return the image with the mask on it"""
     for c in range(3):
         image[:, :, c] = np.where(mask == 1, 
