@@ -1,0 +1,43 @@
+usefull info on maskrcnn
+
+### grab more info / more reading
+#to optimize GPU memory: https://github.com/matterport/Mask_RCNN/wiki
+#https://engineering.matterport.com/splash-of-color-instance-segmentation-with-mask-r-cnn-and-tensorflow-7c761e238b46
+
+### info on how its working
+*The network generates the bounding boxes first, and then filters them to pick the most accurate ones, and then finally applies the mask branch only on the detected boxes. This arrangement actually makes the network faster because it allows it to run the mask branch (which is a heavy branch) only on the boxes that have already been filtered.
+*the classification comes before generating the pixel by pixel. 
+*object-detection and mask are parallel run
+
+### maskrcnn output 
+results = model.detect([image1,image2], verbose=0)
+r1 = results[0] #take results of the image1
+r2 = results[1] #take results of the image2
+li_bboxes = [(b[1], b[0], b[3]-b[1], b[2]-b[0]) for b in r1['rois']] #x,y,w,h while maskrcnn output x1,y1,x2,y2
+li_bmasks = r1['masks'] #binary masks
+print('There is %d masks'%len(li_bmasks[0][0])) #first mask: li_bmasks[:,:,0], second mask: li_bmasks[:,:,1]
+
+r1 example:
+{'class_ids': array([5]), 'masks': array([[[False],
+         [False],
+         [False],
+         ...,
+         [False],
+         [False],
+         [False]],
+ 
+        ...,
+ 
+        [[False],
+         [False],
+         [False],
+         ...,
+         [False],
+         [False],
+         [False]]]), 'rois': array([[158, 258, 239, 416]]), 'scores': array([0.35618505], dtype=float32)}
+
+
+
+
+
+

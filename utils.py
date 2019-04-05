@@ -432,7 +432,8 @@ def plot_bboxes(li_bboxes, image, li_text=None):
 #remove from a list of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
 #note that the (0,0) point in an image is up left.
 def remove_embedded_bbox(li_bbox, plot_bbox=0):
-    
+    '''from a list of bbox (x,y,w,h) it will output a list of bbox with no bbox included in others. if asked, it will plot an image \
+    per removal of one bbox, where in red is the removed bbox and in green the one inducing the removal (i.e. the bigger one)'''
     #sort (smaller to bigger) list of rectangles by the highest height (to make things more efficient)
     li_bbox = sorted(li_bbox,key=itemgetter(3))
     
@@ -446,34 +447,126 @@ def remove_embedded_bbox(li_bbox, plot_bbox=0):
         for bbox2 in li_bbox[i+1:]:
             x1, y1, w1, h1 =  bbox
             x2, y2, w2, h2 =  bbox2
+            #if there is one bbox in another one color in red the one that will be removed and in green the bigger one
             if (w1<w2) & (x1>x2) & (y1>y2) & (x1+w1<x2+w2) & (y1+h1<y2+h2):
                 li_bbox_r.remove(bbox)
 
                 #plot (to debug)
                 if plot_bbox==1:
-                    #print(x1, y1, w1, h1)
-                    #print('is included in :')
-                    #print(x2, y2, w2, h2)
-                    # Create figure and axes
+                    #print((x1, y1, w1, h, 'is included in :', x2, y2, w2, h2)
                     fig,ax = plt.subplots(1)
-                    # Display the image
                     ax.imshow(np.zeros(shape=(max(y1+h1,y2+h2)+50,max(x1+w1,x2+w2)+50)))
-                    # Create a Rectangle patch
                     rect = patches.Rectangle((x1,y1),w1,h1,linewidth=1,edgecolor='r',facecolor='none')
-                    # Add the patch to the Axes
                     ax.add_patch(rect)
-
-                    rect = patches.Rectangle((x2,y2),w2,h2,linewidth=1,edgecolor='r',facecolor='none')
-                    # Add the patch to the Axes
+                    rect = patches.Rectangle((x2,y2),w2,h2,linewidth=1,edgecolor='green',facecolor='none')
                     ax.add_patch(rect)
                     plt.show()
                 break
     return(li_bbox_r)
 #small test for embeded images
-#li_bbox = [(1281, 79, 933, 1425), (1557, 600, 282, 396)]
-#remove_embedded_bbox(li_bbox,plot_bbox=1)
+#li_bbox = [(1281, 79, 933, 1425), (1557, 600, 282, 396), (1557, 600, 28, 39), (40,800,100,100)]
+#li_bbox_r = remove_embedded_bbox(li_bbox,plot_bbox=1)
+#plot the remaining bbox:
+#liy = [y+h for (x,y,w,h) in li_bbox_r]
+#lix = [x+w for (x,y,w,h) in li_bbox_r]
+#fig,ax = plt.subplots(1)
+#ax.imshow(np.zeros(shape=(max(liy)+50,max(lix)+50)))
+#for (x,y,w,h) in li_bbox_r:
+    # Create a Rectangle patch
+#    rect = patches.Rectangle((x,y),w,h,linewidth=1,edgecolor='r',facecolor='none')
+    # Add the patch to the Axes
+#    ax.add_patch(rect)
 
-#take an image and return the image withou reflect
+#remove from a list of rectangles (tuples: (x,y,w,h)), the rectangle embedded in another one
+#note that the (0,0) point in an image is up left.
+def remove_embedded_bbox_keepindexonly(li_bbox, plot_bbox=0):
+    '''from a list of bbox (x,y,w,h) it will output a list of index of the bbox with no bbox included in others. if asked, it will plot \
+    an image per removal of one bbox, where in red is the removed bbox and in green the one inducing the removal (i.e. the bigger one)'''
+    #sort (smaller to bigger) list of rectangles by the highest height (to make things more efficient)
+    #should be done in your notebook before using this function, otherwise wrong output
+    #li_bbox = sorted(li_bbox,key=itemgetter(3))
+    
+    #initialize list of rectangle not to return
+    li_index_r = []
+    
+    #remove all rectangle when its included in another one. Hence we will compare each rectangle with the one having
+    #a higher height only (for efficiency). as soon as we see that the rectangle is included in another one we will remove it and pass 
+    #to the next one
+    for i,bbox in enumerate(li_bbox):
+        for bbox2 in li_bbox[i+1:]:
+            x1, y1, w1, h1 =  bbox
+            x2, y2, w2, h2 =  bbox2
+            #if there is one bbox in another one
+            if (w1<w2) & (x1>x2) & (y1>y2) & (x1+w1<x2+w2) & (y1+h1<y2+h2):
+                li_index_r.append(i)
+
+                #plot (to debug)color in red the one that will be removed and in green the bigger one 
+                if plot_bbox==1:
+                    #print((x1, y1, w1, h, 'is included in :', x2, y2, w2, h2)
+                    fig,ax = plt.subplots(1)
+                    ax.imshow(np.zeros(shape=(max(y1+h1,y2+h2)+50,max(x1+w1,x2+w2)+50)))
+                    rect = patches.Rectangle((x1,y1),w1,h1,linewidth=1,edgecolor='r',facecolor='none')
+                    ax.add_patch(rect)
+                    rect = patches.Rectangle((x2,y2),w2,h2,linewidth=1,edgecolor='green',facecolor='none')
+                    ax.add_patch(rect)
+                    plt.show()
+                break
+    return([i for i in range(len(li_bbox)) if i not in li_index_r])
+
+
+#binary masks: if one is included at least 90% in another one, then remove the less probable between both
+def BinaryMaskPostProcessing(r, p=90):
+    '''it will postprocess mask-rcnn output and output a more precise one of exact same format, removing the ones that\
+    are/have at least 90% included in/from another one (in which case we removed the less certain object even if its not \
+    the one being in another one for our observation its better like this)'''
+    
+    #sort so that under a certain condition verified with any object i+1, object i will be removed, and we will pass through
+    #each combination
+    li_sortedindex = sorted(range(len(r['scores'])), key=lambda k: r['scores'][k])
+    
+    #grab info from mask-rcnn output
+    li_proba = r['scores']
+    li_bbox = r['rois']
+    li_bmask = r['masks']
+    li_m = [li_bmask[:,:,i] for i in range(len(li_bmask[0][0]))]
+    li_index_2remove = []
+    
+    for i,index in enumerate(li_sortedindex):
+        m1 = li_m[index]
+        #compare all one by one until one is removed and need no more control
+        for index2 in li_sortedindex[i+1:]:
+            m2 = li_m[index2]
+            s1 = sum(sum(m1))
+            s2 = sum(sum(m2))
+            unions = np.sum(m1|m2)
+            intersections = np.sum(m1*m2)
+            #print(s1,s2,unions,intersections)
+            #if one mask has at least p% included in the other mask, then remove the less probable one if one is really less 
+            #probably, otherwise remove the smallest one
+            if intersections > (p/100)*min(s1, s2):
+                li_index_2remove.append(index)
+                break
+                
+    #return the results without the info of the index to remove
+    if len(li_index_2remove)==0:
+        return(r)
+    else:
+        rr = {}
+        for k,v in r.items():
+            if k=='masks':
+                #TODO: faster! nearly 5 second when we need to remvoe a mask!!
+                #small example on how to remove a mask (i.e. entries in third dimension based on a list of index)
+                #l = np.array([[[1,9,45],[22,7,54],[3,5,43]],[[2,33,3],[6,333,34],[3,45,5]],[[0,6,66],[2,65,87],[4,68,123]]])
+                #np.array([[np.delete(np.array(j), [1,0], 0) for j in x] for x in l])
+                rr[k] = np.array([[np.delete(j, li_index_2remove, 0) for j in x] for x in v])
+                continue
+            else:
+                rr[k] = np.delete(v, li_index_2remove, 0)
+    
+        return(rr)
+
+    
+#take an image and return the image without reflect
 def data_augmentation_remove_reflect(img):
     '''r: Radius of a circular neighborhood of each point inpainted that is considered by the algorithm.'''
     #convert it to grayscale
@@ -1922,7 +2015,7 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
 def side_line(X_LINE, x, w):
     if (X_LINE>=x) & (X_LINE<=x+w):
         return('m')
-    elif X_line<x:
+    elif X_LINE<x:
         return('l')
     else:
         return('r')
@@ -1933,7 +2026,7 @@ def is_passed(dico0_id_bboxes_mask, id_, x2, y2, w2, h2, X_LINE):
     '''given the old bboxes with their id and the new id with its bbox, and the line to take into account, it will \
     output if the object has passed and if yes, in which direction'''
     #if new object then it did not passed the line. otherwise, it pass if side1 in r,m & side2=l ; or; side1 in l,m & side2=r
-    if id_ in dico0_id_bboxes_mask.keys():
+    if id_ not in dico0_id_bboxes_mask.keys():
         return(False,None)
     else:
         (x1,y1,w1,h1),mask = dico0_id_bboxes_mask[id_]
