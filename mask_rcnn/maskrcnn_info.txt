@@ -36,6 +36,9 @@ r1 example:
          [False],
          [False]]]), 'rois': array([[158, 258, 239, 416]]), 'scores': array([0.35618505], dtype=float32)}
 
+### code
+fucntion that 'gives the images': in model.py of mask-rcnn code check the load_image_gt() function, which use: image = dataset.load_image(image_id), same as in inspect_model notebook
+
 
 
 
