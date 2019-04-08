@@ -2012,39 +2012,44 @@ def create_consecutive_frames(video_path, video_name, path_image, gap, sim_index
         df = pd.DataFrame(li_annotation_info)
         df.to_csv(os.path.join(path_save_images, 'annotation_info.csv'), index=False, sep=';')
     
+        
 def side_line(X_LINE, x, w):
     if (X_LINE>=x) & (X_LINE<=x+w):
         return('m')
     elif X_LINE<x:
-        return('l')
-    else:
         return('r')
+    else:
+        return('l')  
     
-#TODO: modify computation of side when line is not in middle    
-#rules that say if an object has passed the vertical line
-def is_passed(dico0_id_bboxes_mask, id_, x2, y2, w2, h2, X_LINE):
+def is_passed_and_side(dico0_id_side, id_, x2, y2, w2, h2, X_LINE):
     '''given the old bboxes with their id and the new id with its bbox, and the line to take into account, it will \
     output if the object has passed and if yes, in which direction'''
-    #if new object then it did not passed the line. otherwise, it pass if side1 in r,m & side2=l ; or; side1 in l,m & side2=r
-    if id_ not in dico0_id_bboxes_mask.keys():
-        return(False,None)
-    else:
-        (x1,y1,w1,h1),mask = dico0_id_bboxes_mask[id_]
-        side1 = side_line(X_LINE, x1, w1)
-        side2 = side_line(X_LINE, x2, w2)
-        if side1 in ['r','m'] & side2=='l':
-            return(True,'r2l')
-        elif side1 in ['l','m'] & side2=='r':
-            return(True,'l2r')
-        else:
-            return(False,None)
     
+    #update the side of each new object: equals to the previous side, unless it has be counted as a passed fish in which case it 
+    #change side. Also, if its a new object then we take the most predominant side    
+    dico_bool_side = {True:'l', False:'r'}
+    
+    if id_ not in dico0_id_side.keys():
+        #most predominant side (in case first mask is in middle, hence will be wrong (i.e. no count) if first image is more to the left
+        #side of the line but come originaly from right, impossible to remove this issue)
+        return(dico_bool_side[(X_LINE-x2)>(x2+w2-X_LINE)],False,None) 
+    else:
+        side1 = dico0_id_side[id_]
+        side2 = side_line(X_LINE, x2, w2)
+        if (side1=='r') & (side2=='l'):
+            return('l',True,'r2l')
+        elif (side1=='l') & (side2=='r'):
+            return('r',True,'l2r')
+        else:
+            return(side1,False,None)
+
+        
 #given an old dico-result and the new dico_id_bboxes with the X_LINE from which we need to count object, it will
 #update the dico-results of the form:
 #results = {'object_count':5,
 #           'frame_count':1,
 #           'dico_last_objects':{}}#{1:(61, 326, 175, 84), 2:(415, 145, 129, 87)}}    
-def update_results(results, dico0_id_bboxes_mask, dico_id_bboxes_mask, X_LINE, nbr_frames=10):
+def update_results(results, dico0_id_side, dico_id_bboxes_mask, X_LINE, nbr_frames=10):
     
     #update number of frames saw
     results['frame_count'] = results['frame_count'] + 1
@@ -2056,9 +2061,11 @@ def update_results(results, dico0_id_bboxes_mask, dico_id_bboxes_mask, X_LINE, n
     #update the last saw objects
     results['dico_last_objects'] = dico_id_bboxes_mask
     
-    #see if an object has passed, and if yes update values
+    #update side & see if an object has passed, and if yes update values
+    dico_id_side = {}
     for id_, ((x2,y2,w2,h2),mask) in dico_id_bboxes_mask.items():
-        has_passed, direction = is_passed(dico0_id_bboxes_mask, id_, x2, y2, w2, h2, X_LINE)
+        s, has_passed, direction = is_passed_and_side(dico0_id_side, id_, x2, y2, w2, h2, X_LINE)
+        results['dico_id_side'][id_] = s
         if has_passed:
             if direction=='r2l':
                 results['li_id_passed_object_r2l'].append(id_)
