@@ -8,6 +8,8 @@ usefull info on maskrcnn
 *The network generates the bounding boxes first, and then filters them to pick the most accurate ones, and then finally applies the mask branch only on the detected boxes. This arrangement actually makes the network faster because it allows it to run the mask branch (which is a heavy branch) only on the boxes that have already been filtered.
 *the classification comes before generating the pixel by pixel. 
 *object-detection and mask are parallel run
+*Masks are generated at the pixel level. In other words, each pixels decides for itself if it's part of the mask or not. So the mask can take any shape, if you have binary masks (then simply use them directly Skiping the binary->polygon->binary conversion which treats the masks of holes as the object mask during training). If you want to have hole in your masks and dontahve bianry mask, then you can create one mask with a bridge between holes for example. https://github.com/matterport/Mask_RCNN/issues/933
+*A test you can do to rule out any technical issues is to test on the training data. If masks look good on the training data but bad on the validation data, then this confirms that you need a bigger dataset.
 
 ### maskrcnn output 
 results = model.detect([image1,image2], verbose=0)
@@ -40,6 +42,49 @@ r1 example:
 fucntion that 'gives the images': in model.py of mask-rcnn code check the load_image_gt() function, which use: image = dataset.load_image(image_id), same as in inspect_model notebook
 
 
+## training
+def train(model):
+    
+    path_ = path_image
+    
+    """Train the model."""
+    #training dataset.
+    dataset_train = utils_data_class_and_config.VGG_Dataset()
+    dataset_train.load_vgg(path_, "train", remove_MA=False)
+    dataset_train.prepare()
+
+    #validation dataset
+    dataset_val = utils_data_class_and_config.VGG_Dataset()
+    dataset_val.load_vgg(path_, "val", remove_MA=False)
+    dataset_val.prepare()
+
+    #training stage 1
+    #print("Training network heads")
+    #model.train(dataset_train, dataset_val,
+    #            learning_rate = config.LEARNING_RATE,
+    #            epochs = 50,
+    #            layers = 'heads')  #augmentation=aug
+    
+    #training - Stage 2
+    # Finetune layers from ResNet stage 4 and up
+    #print("Fine tune Resnet stage 4 and up")
+    #model.train(dataset_train, dataset_val,
+    #            learning_rate = config.LEARNING_RATE/10,
+    #            epochs = 90,
+    #            layers = '3+', augmentation=aug) #3+/4+
+
+    #training - Stage 3
+    # Fine tune all layers
+    #print("Fine tune all layers")
+    model.train(dataset_train, dataset_val,
+                learning_rate=config.LEARNING_RATE/10,
+                epochs=75,
+                layers='all')
+    
+    model.train(dataset_train, dataset_val,
+                learning_rate=config.LEARNING_RATE/100,
+                epochs=90,
+                layers='all')
 
 
 
