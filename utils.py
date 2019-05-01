@@ -28,6 +28,17 @@ import re
 import fuzzysearch
 from fuzzysearch import find_near_matches
 
+#kmeans
+from scipy import stats
+import pandas as pd
+import numpy as np
+import sklearn
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_samples, silhouette_score
+
+#string similarity between two strings
+from similarity.jarowinkler import JaroWinkler
+
 #video
 import skvideo.io 
 #from skimage import color
@@ -187,7 +198,7 @@ def parse(content,end_of_title,encoding='utf-8'):
 #################################### structured data from text ####################################
 ###################################################################################################
 
-#take as input an image ( np.array or PIL image)
+#take as input an image (np.array or PIL image)
 def frompng2images(img, path, page_id=0, plot_=0):
     
     #convert to numpy if its not
@@ -264,6 +275,129 @@ def from_path_scannpdf_book_2image(path, path_save, nbrp=2, plot_=0):
     for i,page in enumerate(pages):
         frompng2images(img=page, path=path_save, page_id=i, plot_=plot_)    
     del pages
+    
+    
+#from a string x withoutwhitespace, and a list of whitespace index, it return the string wiht the adequate whitespace
+def from_string_without_whitespace_to_string_withwithespace(x, li_index):
+    initial_length = len(x)+len(li_index)
+    for i in range(initial_length):
+        if i in li_index:
+            x = x[0:i] + ' ' + x[i:]
+    return(x)
+#small example
+#x = 'ab asd whfjzf gdzf  fuj'
+#x_ = ''.join(x.split(' '))
+#li_index = [m.start() for m in re.finditer(' ', x)]
+#from_string_without_whitespace_to_string_withwithespace(x_, li_index)
+
+
+#given a list of text without any whitespace and a list of whitespace index corresponding to its original whitespace
+#places, it will output a list with whitespace at the corret places (not at end or begining of entries if their was any)
+def from_string_without_whitespace_to_string_withwithespace(li_x, li_index):
+    
+    #removing space at end and begining
+    li_x = [x.strip() for x in li_x]
+    
+    #initialisation
+    x = ''.join(li_x)
+    li_x_r = []
+    initial_length = len(x)+len(li_index)
+    li_split_index = [len(x) for x in li_x]
+    li_split_index = [sum(li_split_index[0:i])-1 for i in range(1,len(li_split_index))]
+    last_split_index = -1
+    
+    #pass through each index
+    for i in tqdm.tqdm(range(initial_length)):
+        #if it should have a whitespace at this index
+        if i in li_index:
+            x = x[0:i] + ' ' + x[i:]
+            li_split_index = [i+1 for i in li_split_index]
+            #print('whitespace',i,li_split_index)
+            
+        #if it should be splitted at this place
+        if i in li_split_index:
+            #print('splitted',i,li_split_index)
+            li_x_r.append(x[last_split_index+1:i+1])
+            last_split_index = i
+            
+    #add last part and return
+    li_x_r.append(x[last_split_index+1:])
+    return([i.strip() for i in li_x_r if i!=' '])
+#small example: from a text and a list of title, without taking into account whitespace, we want to split it, keeping
+#at the end the whitespace too
+#text = 'hello snake1 and goodbye snake  2b jkjk labla snake3 '
+#li_title = ['snake1', 'snake 2', 'snake3']
+#text_nws = ''.join(text.split(' '))
+#li_title_nws = [''.join(x.split(' ')) for x in li_title]
+#print(li_title_nws)
+#pattern = ''
+#for p in li_title_nws:
+#    pattern = pattern+'|'+p
+#pattern = pattern.strip('|')
+#print(pattern)
+#pattern = re.compile(r'(%s)'%pattern)
+#li_text_nws = pattern.split(text_nws)
+#print(li_text_nws)
+#li_ws_index = [m.start() for m in re.finditer(' ', text)]
+#print(li_ws_index)
+#from_string_without_whitespace_to_string_withwithespace(li_text_nws, li_ws_index)
+
+
+#from doxc file extract all the bold text , outputing one string. the idea is to extract letter by letter and when one is not bold, we will not add to the ouput (except when its a whitespace and before was a bold letter
+def extract_bold_text(document):
+    li_bolds = []
+    for para in document.paragraphs:
+        last_was_bold = 0
+        li_bolds.append(' ')
+        for run in para.runs:
+            if run.bold:
+                li_bolds.append(run.text)
+                last_was_bold = 1
+            elif (last_was_bold==1) & (run.text==' '):
+                li_bolds.append(run.text)
+                last_was_bold = 0
+    return(''.join(li_bolds))
+
+
+#from a text (chapter text) and with a list of bold-title to find, we will output the text splitted with the titles
+#or closest matched titles
+def from_chapter_to_structured_data(text, li_title):
+    
+    #remove all whitespace as these are not equally ditributed in the bold or in the text outptu
+    text_nws = ''.join(text.split(' '))
+    li_title_nws = [''.join(x.split(' ')) for x in li_title]
+    
+    #get index of whitespace in original text
+    li_ws_index = [m.start() for m in re.finditer(' ', text)]
+    
+    #create a list of titles which all match 
+    li_matched_title = []
+    title_not_matched = []
+    li_distance = []
+    for i,title in enumerate(li_title):
+        r = find_near_matches(title, text_nws, max_deletions=max(int(0.10*len(title)),1), 
+                              max_insertions=max(int(0.05*len(title)),1), max_substitutions=0)
+        if len(r)==1:
+            li_matched_title.append(text[r[0][0]:r[0][1]])
+            li_distance.append(r[0][2])
+        #keep track of non-matched title (to add rules perhaps or allow more flexibility: TODO)
+        elif len(r)==0:
+            print(title)
+            title_not_matched.append(title)
+        else:
+            print(r)
+
+    #create a list from text by splitting it with the titles
+    pattern = ''
+    for p in li_matched_title:
+        pattern = pattern+'|'+p.replace('(','\(').replace(')','\)').replace('|','\|') #caractere not supp in regex without backslash
+    pattern = pattern.strip('|')
+    pattern = re.compile(r'(%s)'%pattern)
+    li_text_nws = pattern.split(text_nws)
+    
+    #compute and return the splited list with adequate whitespace
+    r = from_string_without_whitespace_to_string_withwithespace(li_text_nws, li_ws_index)
+    return(r, title_not_matched, li_matched_title, li_distance)
     
 ###################################################################################################
 ################################### preprocessing fct for image ###################################
@@ -939,6 +1073,85 @@ class DataGenerator(keras.utils.Sequence):
     
     
 ###################################################################################################
+###################################### statistics & measure #######################################
+###################################################################################################
+
+def kmeans_clustering(df, range_n_clusters, drop_col_list=[]):
+    '''The Nan entry will be converted to the mean of the columns, so that they do not really influence the classification.
+    The kmeans packages allows you to do clustering on continuous variables, for categorical variables use kmodes.
+    This function output firstly a list of the class label for each node, secondly the centers
+    silhouette score: The best value is 1 and the worst value is -1. Values near 0 indicate overlapping clusters.'''
+    
+    #drop some values if asked (often for the id)
+    if len(drop_col_list)>0:
+        df = df.drop(drop_col_list,axis=1)    
+    
+    #replace Na values by the mean, so that when we sum columns we dont loose information. TO BE CHANGED WHEN NEEDED
+    df.fillna(df.mean(),inplace=True)
+    
+    #choosing the right number of cluster
+    for n_clusters in range_n_clusters:
+        # Initialize the clusterer with n_clusters value and a random generator seed of 10 for reproducibility.
+        clusterer = KMeans(n_clusters=n_clusters, random_state=10)
+        cluster_labels = clusterer.fit_predict(df)
+        # The silhouette_score gives the average value for all the samples.
+        # This gives a perspective into the density and separation of the formed clusters
+        silhouette_avg = silhouette_score(df, cluster_labels)
+        print("For n_clusters =", n_clusters,
+              "The average silhouette_score is :", silhouette_avg)   
+    k = input('Please let me know the numbers of clusters you want to search for ')
+                    
+    #apply kmeans
+    print(df.shape)
+    km = KMeans(n_clusters=int(k),random_state=3).fit(df)
+    result = km.labels_
+    return (result, km.cluster_centers_)
+#X = df[[columns of interest]]
+#r,center_ = kmeans_clustering(X,range(2,10))
+#df_clust = pd.concat([X,pd.DataFrame(r)],axis=1)
+#df_clust
+#from mpl_toolkits.mplot3d import Axes3D
+#### one table with mean for each variable within each clusters if three clusters
+#df0 = df_clust[df_clust[0]==0]
+#df1 = df_clust[df_clust[0]==1]
+#df2 = df_clust[df_clust[0]==2]
+#df0_m = df0.mean()
+#df1_m = df1.mean()
+#df2_m = df2.mean()
+#df_m = pd.concat([df0_m,df1_m,df2_m,axis=1)
+#otherwise:
+#### same but with boxplot instead
+#function ploting boxplot for each x variable in each cluster (given by the 'cluster_name' column from df)
+# s is the space between each x-variable
+#histo_clustering(df_final,['perc_client_call_0_time_today','perc_client_call_more_3_time_today'],
+#                'clustering_coeff',s = 130,title_='Number time client already called today')
+
+
+
+#computing chi2-distance
+def chi2_distance(x,li):
+    l = []
+    if len(li)>0:
+        for y in li:
+            l.append(sum(np.subtract(x,y)**2/(np.add(x,y)+0.0000000001)) /2)
+    return np.nanmean(l)
+
+
+def string_similarity_proposition(s, li_s):
+    '''function that takes a string, and a list of string and output a list of tuples with the words and the similarity between s and he word
+    Note that if li-s includes s, then the first element from the ouput list will be s itself with similarity 1'''
+    #similarity between two string, good to find typos
+    jarowinkler = JaroWinkler()
+    t_sim = [(s2, jarowinkler.similarity(s, s2)) for s2 in li_s]
+
+    #sort list of tuples with similarity index
+    t_sim = sorted(t_sim,key=itemgetter(1),reverse=True)
+    
+    return(t_sim)
+
+
+
+###################################################################################################
 ########################################### other & old ###########################################
 ###################################################################################################
 
@@ -962,7 +1175,7 @@ def lists_remove_in1(li1,li2,s):
 def myround(x, base=5):
     return int(base * round(float(x)/base))
 
-#this fct was taken from internet then modified. It generate a list og random color
+#this fct was taken from internet then modified. It generate a list of random color
 def random_colors(N, bright=True):
     """
     To get visually distinct colors, generate them in HSV space then convert to RGB.
@@ -1003,10 +1216,10 @@ def join_dico(li_s):
 #join_dico([s1,s2,s3,s4]) 
 
 
-#take two strings as input. rule pour enlever les pluriels/singulier: guarder celui qui permettra de retrouver l'autre (car pas forcément le cas
-#dans les deux sens) ou alors garder celui qui est ordonner alphabetiquement le premier (si les deux peuvent induire l'autre)
+#take two strings as input. rule pour enlever les pluriels/singulier: guarder celui qui permettra de retrouver l'autre (car pas forcément
+#le cas dans les deux sens) ou alors garder celui qui est ordonner alphabetiquement le premier (si les deux peuvent induire l'autre)
 #example d'utilisation: si initialement dans notre liste d'ingredient il y a une forme qui ne permet pas de retourner 
-#à son autre form, alors il faudra l'updater avec l'autre
+#à son autre forme, alors il faudra l'updater avec l'autre
 engine = inflect.engine()
 def keep_goodone_singplu(x1,x2):
     x1_s = engine.plural(x1)
@@ -1022,58 +1235,6 @@ def keep_goodone_singplu(x1,x2):
 #e.g.
 #keep_goodone_singplu('pie cakes','pie cake')
 #the plural are: pie cakess, pie cakes -->'pie cake'
-
-
-#taken from: 
-#from:https://github.com/benhamner/Metrics/blob/master/Python/ml_metrics/quadratic_weighted_kappa.py
-def histogram(ratings):
-    """Returns the counts of each type of rating that a rater made"""
-    min_rating = min(ratings)
-    max_rating = max(ratings)
-    num_ratings = int(max_rating - min_rating + 1)
-    hist_ratings = [0 for x in range(num_ratings)]
-    for r in ratings:
-        hist_ratings[r - min_rating] += 1
-    return hist_ratings
-def quadratic_weighted_kappa(rater_a, rater_b):
-    """
-    Calculates the quadratic weighted kappa
-    quadratic_weighted_kappa calculates the quadratic weighted kappa
-    value, which is a measure of inter-rater agreement between two raters
-    that provide discrete numeric ratings.  Potential values range from -1
-    (representing complete disagreement) to 1 (representing complete
-    agreement).  A kappa value of 0 is expected if all agreement is due to
-    chance.
-    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
-    each correspond to a list of integer ratings.  These lists must have the
-    same length.
-    The ratings should be integers, and it is assumed that they contain
-    the complete range of possible ratings.
-    """
-    rater_a = np.array(rater_a, dtype=int)
-    rater_b = np.array(rater_b, dtype=int)
-    assert(len(rater_a) == len(rater_b))
-    min_rating = min(min(rater_a), min(rater_b))
-    max_rating = max(max(rater_a), max(rater_b))
-    conf_mat = confusion_matrix(rater_a, rater_b)
-    num_ratings = len(conf_mat)
-    num_scored_items = float(len(rater_a))
-
-    hist_rater_a = histogram(rater_a, 0, 4)
-    hist_rater_b = histogram(rater_b, 0, 4)
-    numerator = 0.0
-    denominator = 0.0
-
-    for i in range(num_ratings):
-        for j in range(num_ratings):
-            expected_count = (hist_rater_a[i] * hist_rater_b[j]
-                              / num_scored_items)
-            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
-            numerator += d * conf_mat[i][j] / num_scored_items
-            denominator += d * expected_count / num_scored_items
-
-    return 1.0 - numerator / denominator
-
 
 #output a itertools of tuples of all possible combinations of 2 elements form the list 'li'
 def all_subsets(li):
@@ -1105,129 +1266,6 @@ def all_except_keys(dico,li_ke):
     r = list(dico_.values())
     r = [i for sublist in r for i in sublist]
     return(set(r))        
-
-
-#from a string x withoutwhitespace, and a list of whitespace index, it return the string wiht the adequate whitespace
-def from_string_without_whitespace_to_string_withwithespace(x, li_index):
-    initial_length = len(x)+len(li_index)
-    for i in range(initial_length):
-        if i in li_index:
-            x = x[0:i] + ' ' + x[i:]
-    return(x)
-#small example
-#x = 'ab asd whfjzf gdzf  fuj'
-#x_ = ''.join(x.split(' '))
-#li_index = [m.start() for m in re.finditer(' ', x)]
-#from_string_without_whitespace_to_string_withwithespace(x_, li_index)
-
-
-#given a list of text without any whitespace and a list of whitespace index corresponding to its original whitespace
-#places, it will outputa list with whitespace at the coret places (not at end or begning of entries if their was any)
-def from_string_without_whitespace_to_string_withwithespace(li_x, li_index):
-    
-    #removing space at end and begining
-    li_x = [x.strip() for x in li_x]
-    
-    #initialisation
-    x = ''.join(li_x)
-    li_x_r = []
-    initial_length = len(x)+len(li_index)
-    li_split_index = [len(x) for x in li_x]
-    li_split_index = [sum(li_split_index[0:i])-1 for i in range(1,len(li_split_index))]
-    last_split_index = -1
-    
-    #pass through each index
-    for i in tqdm.tqdm(range(initial_length)):
-        #if it should have a whitespace at this index
-        if i in li_index:
-            x = x[0:i] + ' ' + x[i:]
-            li_split_index = [i+1 for i in li_split_index]
-            #print('whitespace',i,li_split_index)
-            
-        #if it should be splitted at this place
-        if i in li_split_index:
-            #print('splitted',i,li_split_index)
-            li_x_r.append(x[last_split_index+1:i+1])
-            last_split_index = i
-            
-    #add last part and return
-    li_x_r.append(x[last_split_index+1:])
-    return([i.strip() for i in li_x_r if i!=' '])
-#small example: from a text and a list of title, without taking into account whitespace, we want to split it, keeping
-#at the end the whitespace too
-#text = 'hello snake1 and goodbye snake  2b jkjk labla snake3 '
-#li_title = ['snake1', 'snake 2', 'snake3']
-#text_nws = ''.join(text.split(' '))
-#li_title_nws = [''.join(x.split(' ')) for x in li_title]
-#print(li_title_nws)
-#pattern = ''
-#for p in li_title_nws:
-#    pattern = pattern+'|'+p
-#pattern = pattern.strip('|')
-#print(pattern)
-#pattern = re.compile(r'(%s)'%pattern)
-#li_text_nws = pattern.split(text_nws)
-#print(li_text_nws)
-#li_ws_index = [m.start() for m in re.finditer(' ', text)]
-#print(li_ws_index)
-#from_string_without_whitespace_to_string_withwithespace(li_text_nws, li_ws_index)
-
-
-#from doxc file extract all the bold text , outputing one string. the idea is to extract letter by letter and when one is not bold, we will not add to the ouput (except when its a whitespace and before was a bold letter
-def extract_bold_text(document):
-    li_bolds = []
-    for para in document.paragraphs:
-        last_was_bold = 0
-        li_bolds.append(' ')
-        for run in para.runs:
-            if run.bold:
-                li_bolds.append(run.text)
-                last_was_bold = 1
-            elif (last_was_bold==1) & (run.text==' '):
-                li_bolds.append(run.text)
-                last_was_bold = 0
-    return(''.join(li_bolds))
-
-
-#from a text (chapter text) and with a list of bold-title to find, we will output the text splitted with the titles
-#or closest matched titles
-def from_chapter_to_structured_data(text, li_title):
-    
-    #remove all whitespace as these are not equally ditributed in the bold or in the text outptu
-    text_nws = ''.join(text.split(' '))
-    li_title_nws = [''.join(x.split(' ')) for x in li_title]
-    
-    #get index of whitespace in original text
-    li_ws_index = [m.start() for m in re.finditer(' ', text)]
-    
-    #create a list of titles which all match 
-    li_matched_title = []
-    title_not_matched = []
-    li_distance = []
-    for i,title in enumerate(li_title):
-        r = find_near_matches(title, text_nws, max_deletions=max(int(0.10*len(title)),1), 
-                              max_insertions=max(int(0.05*len(title)),1), max_substitutions=0)
-        if len(r)==1:
-            li_matched_title.append(text[r[0][0]:r[0][1]])
-            li_distance.append(r[0][2])
-        #keep track of non-matched title (to add rules perhaps or allow more flexibility: TODO)
-        elif len(r)==0:
-            print(title)
-            title_not_matched.append(title)
-        else:
-            print(r)
-
-    #create a list from text by splitting it with the titles
-    pattern = ''
-    for p in li_matched_title:
-        pattern = pattern+'|'+p.replace('(','\(').replace(')','\)').replace('|','\|') #caractere not supp in regex without backslash
-    pattern = pattern.strip('|')
-    pattern = re.compile(r'(%s)'%pattern)
-    li_text_nws = pattern.split(text_nws)
-    
-    #compute and return the splited list with adequate whitespace
-    r = from_string_without_whitespace_to_string_withwithespace(li_text_nws, li_ws_index)
-    return(r, title_not_matched, li_matched_title, li_distance)
 
 
 
@@ -1288,6 +1326,57 @@ def df_to_arrays(df, names=None):
 ###################################################################################################
 ############################################### plot ##############################################
 ###################################################################################################
+
+#taken from: 
+#from:https://github.com/benhamner/Metrics/blob/master/Python/ml_metrics/quadratic_weighted_kappa.py
+def histogram(ratings):
+    """Returns the counts of each type of rating that a rater made"""
+    min_rating = min(ratings)
+    max_rating = max(ratings)
+    num_ratings = int(max_rating - min_rating + 1)
+    hist_ratings = [0 for x in range(num_ratings)]
+    for r in ratings:
+        hist_ratings[r - min_rating] += 1
+    return hist_ratings
+def quadratic_weighted_kappa(rater_a, rater_b):
+    """
+    Calculates the quadratic weighted kappa
+    quadratic_weighted_kappa calculates the quadratic weighted kappa
+    value, which is a measure of inter-rater agreement between two raters
+    that provide discrete numeric ratings.  Potential values range from -1
+    (representing complete disagreement) to 1 (representing complete
+    agreement).  A kappa value of 0 is expected if all agreement is due to
+    chance.
+    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
+    each correspond to a list of integer ratings.  These lists must have the
+    same length.
+    The ratings should be integers, and it is assumed that they contain
+    the complete range of possible ratings.
+    """
+    rater_a = np.array(rater_a, dtype=int)
+    rater_b = np.array(rater_b, dtype=int)
+    assert(len(rater_a) == len(rater_b))
+    min_rating = min(min(rater_a), min(rater_b))
+    max_rating = max(max(rater_a), max(rater_b))
+    conf_mat = confusion_matrix(rater_a, rater_b)
+    num_ratings = len(conf_mat)
+    num_scored_items = float(len(rater_a))
+
+    hist_rater_a = histogram(rater_a, 0, 4)
+    hist_rater_b = histogram(rater_b, 0, 4)
+    numerator = 0.0
+    denominator = 0.0
+
+    for i in range(num_ratings):
+        for j in range(num_ratings):
+            expected_count = (hist_rater_a[i] * hist_rater_b[j]
+                              / num_scored_items)
+            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
+            numerator += d * conf_mat[i][j] / num_scored_items
+            denominator += d * expected_count / num_scored_items
+
+    return 1.0 - numerator / denominator
+
 
 # will be used in the next fct. Its is used to create a list of length x for the explode parameter in the donut plot
 def list_same_number_with_threshold(x, v, nbr_set, nbr_without_explode):
@@ -1357,14 +1446,14 @@ def remove_isolated_index(li, isol):
 #GPU. 1-7%, processeur: 40-50%, mémoire GPU dédié: 3,3/4, mémoire GPU partagé: 0,1/7,9
 #we will save the video to have a visual, but later the purpose is to save representative images of detected fish
 #sorted(li_video_paths, reverse=True)
-def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, img_cols, img_rows, batch_size, path_img_treated_fsv, 
+def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, batch_size, path_img_treated_fsv, 
                       save_video=True, save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
                       save_images_lonely_fromsmallervid=False, nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, 
-                      img_end='.jpg', width=600, height=480, crf=10):
+                      img_end='.jpg', width=600, height=480, crf=10, path_treated_info=None):
     
     '''    
     ----path_initial_video: path to the video to reduce size
-    ----path_treated_info: path to the folder where the treated info will be saved, it will create an images and a videos folder
+    ----path_treated_info: path to the folder where the treated info will be saved, it will create an images and a videos folder. If none then it will save where the initial video is in a fodler named "processed_info"
     ----algo_name: string representing the name of the algo, to save the images and video produced thanks to this algo
     ----model: model to use for fish detection.It must have been trained on 3 channels images created from 3 consecutives images
     ----imgcols, img_rows: img dimension going with the model
@@ -1391,6 +1480,15 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
     ----width, height, crf: parameters given in the FFmpegWriter fct, parameter to save video properly
     ----debug: if True (save_video must be true and save_full_video_with_text must be false) it will save all images used in 
         smaller film for verification and all images from the initial video with their predictions
+        
+        
+        
+   type de situations verifiees:
+    1. poisson des le début : OK
+    2. poisson à la fin : OK
+    3. poisson - pas poisson durant moins de 2*nbr_frames_ba*3 frames - poisson :OK
+    4. rien - poisson un frame - rien: tester nbr_frames_ba et careful_index: OK
+    5. fps dans saved videos
     '''
     
     #start timer
@@ -1413,6 +1511,13 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
         print('the video does not exist at your path')
         sys.exit()
     
+    if path_treated_info==None:
+        path_treated_info = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 
+                                         'processed_info', 
+                                         path_initial_video.split('\\')[-1][:-4])
+        if not os.path.exists(path_treated_info):
+            os.makedirs(path_treated_info)
+
     #create path to save images and create name of smaller video
     path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_c'+str(careful_index)+'n'+str(nbr_frames_ba)+'p'+str(perc_fps_2remove)) 
     #+path_initial_video.split('\\')[-1].split('.')[0]
@@ -1495,11 +1600,9 @@ def reduce_video_size(path_initial_video, path_treated_info, algo_name, model, i
         ##################################################### detect fish #####################################################
         #add images to complete batch
         try:
-            if (batch_size*3)!=len(li_images):
-                li_images = li_images+[li_images[-1] for i in range(0,(batch_size*3)-len(li_images))]
-                #adapt k as well
-                print('instead of %d we will use %d'%(k,75*math.ceil(k/75)))
-                k = batch_size*3*math.ceil(k/(batch_size*3)) #round to the next highest multiple of 75
+            li_images = li_images+[li_images[-1] for i in range(0,(batch_size*3)-len(li_images))]
+            #adapt k as well
+            k = batch_size*3*math.ceil(k/(batch_size*3)) #round to the next highest multiple of 75
 
             #construct one colored image from 3 consecutives images
             li_img = [construct_3image_3channels(li_images[(i*3):(i*3+3)]) for i in range(batch_size)]
@@ -2049,7 +2152,7 @@ def is_passed_and_side(dico0_id_side, id_, x2, y2, w2, h2, X_LINE):
 #results = {'object_count':5,
 #           'frame_count':1,
 #           'dico_last_objects':{}}#{1:(61, 326, 175, 84), 2:(415, 145, 129, 87)}}    
-def update_results(results, dico0_id_side, dico_id_bboxes_mask, X_LINE, nbr_frames=10):
+def update_results(results, dico0_id_side, dico_id_bboxes_mask, X_LINE):
     
     #update number of frames saw
     results['frame_count'] = results['frame_count'] + 1
@@ -2319,7 +2422,7 @@ def random_forest_classifier_parameter_tunning(df, targetnames, varnames = None)
 
 
 ###################################################################################################
-################################## plot for deep learning models ##################################
+###################################### plot for deep learning #####################################
 ###################################################################################################
     
 #took partly from internet, but i dont remember where from...
@@ -2327,8 +2430,8 @@ def random_forest_classifier_parameter_tunning(df, targetnames, varnames = None)
 ##################### Class Activation Maps    
 def plot_heatmap(layer_, li_image, model, img_heatmap_separate=False, save_path=None):
     fig = plt.figure(figsize=(15,15))
-    c = 4
-    l = int(len(li_image)/4) #round inf
+    c = min(4,len(li_image))
+    l = int(len(li_image)/c) #round inf
     img_w = li_image[0].shape[1]
     img_h = li_image[0].shape[0]
     fig = plt.figure(figsize=(int(c*img_w/100), int(l*img_h/100)))
@@ -2504,6 +2607,8 @@ def generate_pattern(layer_name, filter_index, model, img_rows, img_cols):
 #gen_img = generate_pattern(layer_name='block_15_project', filter_index=10)
 #plt.imshow(gen_img)
 #plt.show()    
+    
+    
     
     
     
