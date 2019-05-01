@@ -1446,10 +1446,10 @@ def remove_isolated_index(li, isol):
 #GPU. 1-7%, processeur: 40-50%, mémoire GPU dédié: 3,3/4, mémoire GPU partagé: 0,1/7,9
 #we will save the video to have a visual, but later the purpose is to save representative images of detected fish
 #sorted(li_video_paths, reverse=True)
-def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, batch_size, path_img_treated_fsv, 
+def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, batch_size, 
                       save_video=True, save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
                       save_images_lonely_fromsmallervid=False, nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, 
-                      img_end='.jpg', width=600, height=480, crf=10, path_treated_info=None):
+                      img_end='.jpg', width=600, height=480, crf=10):
     
     '''    
     ----path_initial_video: path to the video to reduce size
@@ -1458,7 +1458,6 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     ----model: model to use for fish detection.It must have been trained on 3 channels images created from 3 consecutives images
     ----imgcols, img_rows: img dimension going with the model
     ----batch_size: corresponding batchsize of the model
-    ----path_img_treated_fsv: path to save all images from smaller video (will be used if save_images_lonely_fromsmallervid==True)
     ----save_images_3in1: if True, it will save each images used as input in the algo, where a fish was detected with the 
         certainty in the name, even if we did not used the image in the video (e.g. if the image was alone in the set of 
         consecutives images). Hence, the purpose of these images is to understand better the weakness of the algorithme to 
@@ -1480,9 +1479,7 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     ----width, height, crf: parameters given in the FFmpegWriter fct, parameter to save video properly
     ----debug: if True (save_video must be true and save_full_video_with_text must be false) it will save all images used in 
         smaller film for verification and all images from the initial video with their predictions
-        
-        
-        
+                
    type de situations verifiees:
     1. poisson des le début : OK
     2. poisson à la fin : OK
@@ -1510,37 +1507,38 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     if len(glob.glob(path_initial_video))!=1:
         print('the video does not exist at your path')
         sys.exit()
+        
+    #info
+    dico_classid_classname = {0:'no-fish', 1:'fish'}
+    dico_class_color = {'no-fish':(139, 0, 0), 'fish':(0, 139, 0)}
+    vid_name = path_initial_video.split('\\')[-1]
+    model_param_name = algo_name+'_c'+str(careful_index)+'n'+str(nbr_frames_ba)+'p'+str(perc_fps_2remove)
     
-    if path_treated_info==None:
-        path_treated_info = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 
-                                         'processed_info', 
-                                         path_initial_video.split('\\')[-1][:-4])
-        if not os.path.exists(path_treated_info):
-            os.makedirs(path_treated_info)
-
     #create path to save images and create name of smaller video
-    path_img_treated = os.path.join(path_treated_info, 'images', algo_name+'_c'+str(careful_index)+'n'+str(nbr_frames_ba)+'p'+str(perc_fps_2remove)) 
-    #+path_initial_video.split('\\')[-1].split('.')[0]
-    path_img_treated_3in1 = os.path.join(path_img_treated, '3in1')
-    path_img_treated_lonely = os.path.join(path_img_treated, 'lonely')
-    path_img_debuginit = os.path.join(path_img_treated, 'debug','init')
-    path_img_debugsaved = os.path.join(path_img_treated, 'debug','saved')
-    path_img_debugcorrectindex = os.path.join(path_img_treated, 'debug','correctindex')
-    path_vid_treated = os.path.join(path_treated_info, 'videos')
+    path_treated_vid = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 'processed_videos')
+    path_treated_img = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]),'processed_images', vid_name[:-4]+'_'+model_param_name)
+    path_treated_list = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 'processed_lists')
+    
+    path_img_treated_3in1 = os.path.join(path_treated_img, '3in1')
+    path_img_treated_lonely = os.path.join(path_treated_img, 'lonely')
+    path_img_treated_fsv = os.path.join(path_treated_img, 'image_from_smaller_video')
+    path_img_debuginit = os.path.join(path_treated_img, 'debug','init')
+    path_img_debugsaved = os.path.join(path_treated_img, 'debug','saved')
+    path_img_debugcorrectindex = os.path.join(path_treated_img, 'debug','correctindex')
     if not os.path.exists(path_img_treated_3in1):
         os.makedirs(path_img_treated_3in1)
     if not os.path.exists(path_img_treated_lonely):
         os.makedirs(path_img_treated_lonely)
+    if not os.path.exists(path_img_treated_fsv):
+        os.makedirs(path_img_treated_fsv)    
     if not os.path.exists(path_img_debuginit):
         os.makedirs(path_img_debuginit)
     if not os.path.exists(path_img_debugsaved):
         os.makedirs(path_img_debugsaved)
     if not os.path.exists(path_img_debugcorrectindex):
         os.makedirs(path_img_debugcorrectindex)
-    if not os.path.exists(path_vid_treated):
-        os.makedirs(path_vid_treated)
-    if not os.path.exists(path_img_treated_fsv):
-        os.makedirs(path_img_treated_fsv)
+    if not os.path.exists(path_treated_vid):
+        os.makedirs(path_treated_vid)
     #read video and output info on the video
     video = cv2.VideoCapture(path_initial_video)
     fps = video.get(cv2.CAP_PROP_FPS)      
@@ -1552,17 +1550,13 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
                                                                                      int(frameCount)))
     if fps==0:
         return
-
-    #info
-    dico_classid_classname = {0:'no-fish', 1:'fish'}
-    dico_class_color = {'no-fish':(139, 0, 0), 'fish':(0, 139, 0)}
-    vid_name = path_initial_video.split('\\')[-1][:-4]
         
     #define writer to save the annotated video. take same nbr of fps as the initial video
-    t_vid = 'smaller_video_'
+    t_vid = ''
     if save_full_video_with_text==True:
         t_vid = 'full_video_with_text_'
-    writer = skvideo.io.FFmpegWriter(os.path.join(path_vid_treated, t_vid+algo_name+'_'+path_initial_video.split('\\')[-1]),
+    smaller_vid_path = os.path.join(path_treated_vid, t_vid+model_param_name+'_'+vid_name)
+    writer = skvideo.io.FFmpegWriter(smaller_vid_path,
                 inputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-s':'{}x{}'.format(width,height)},
                 outputdict={'-r': str(int(fps*(100-perc_fps_2remove)/100)), '-c:v': 'libx264', '-crf': str(crf), '-preset': 'ultrafast',
                             '-pix_fmt':'yuvj420p'}) 
@@ -1787,7 +1781,7 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     
     #give info on smaller video if it was asked to save the smaller video
     if (save_full_video_with_text==False) & (save_video): 
-        smaller_video = cv2.VideoCapture(os.path.join(path_vid_treated, t_vid+algo_name+'_'+path_initial_video.split('\\')[-1]))
+        smaller_video = cv2.VideoCapture(smaller_vid_path)
         fps = smaller_video.get(cv2.CAP_PROP_FPS)      
         frameCount = int(smaller_video.get(cv2.CAP_PROP_FRAME_COUNT))
         duration2 = frameCount/(fps+0.000001)
@@ -1798,10 +1792,10 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
         print('--> it lasts %d percent of the total time of the initial one'%(duration2/duration*100))
     print('------------Finish \n')
     #save seconds of saved frames
-    pickle.dump(li_index_savedimg, open(os.path.join(path_vid_treated,
-                'li_index_savedimg_'+t_vid+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
-    pickle.dump(li_sec_savedimg, open(os.path.join(path_vid_treated,
-                'li_sec_savedimg_'+t_vid+algo_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+    pickle.dump(li_index_savedimg, open(os.path.join(path_treated_list,
+                'index_savedimg_'+t_vid+model_param_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
+    pickle.dump(li_sec_savedimg, open(os.path.join(path_treated_list,
+                'sec_savedimg_'+t_vid+model_param_name+'_'+path_initial_video.split('\\')[-1].replace('.mp4','.pkl')), 'wb'))
 
     if debug:
         video = cv2.VideoCapture(path_initial_video)
