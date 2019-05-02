@@ -1129,12 +1129,16 @@ def kmeans_clustering(df, range_n_clusters, drop_col_list=[]):
 
 
 #computing chi2-distance
-def chi2_distance(x,li):
-    l = []
-    if len(li)>0:
-        for y in li:
-            l.append(sum(np.subtract(x,y)**2/(np.add(x,y)+0.0000000001)) /2)
-    return np.nanmean(l)
+def chi2_distance(l1,l2):
+    '''sompute the following distance: d(x,y) = sum( (xi-yi)^2 / (xi+yi) ) / 2'''
+    if len(l1)!=len(l2):
+        print('your two vectors must have same length')
+        sys.exit()
+    if (sum(l1)!=1) | (sum(l2)!=1):
+        print('your two vectors must be normalized (sumed to one)')
+        sys.exit()
+    d = sum([(l1[i]-l2[i])**2 / ((l1[i]+l2[i])+0.000000000001) for i in range(len(l1))])/2
+    return(d)
 
 
 def string_similarity_proposition(s, li_s):
@@ -1525,6 +1529,8 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     path_img_debuginit = os.path.join(path_treated_img, 'debug','init')
     path_img_debugsaved = os.path.join(path_treated_img, 'debug','saved')
     path_img_debugcorrectindex = os.path.join(path_treated_img, 'debug','correctindex')
+    if not os.path.exists(path_treated_list):
+        os.makedirs(path_treated_list)
     if not os.path.exists(path_img_treated_3in1):
         os.makedirs(path_img_treated_3in1)
     if not os.path.exists(path_img_treated_lonely):
