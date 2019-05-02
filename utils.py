@@ -1127,18 +1127,22 @@ def kmeans_clustering(df, range_n_clusters, drop_col_list=[]):
 #                'clustering_coeff',s = 130,title_='Number time client already called today')
 
 
-
 #computing chi2-distance
 def chi2_distance(l1,l2):
     '''sompute the following distance: d(x,y) = sum( (xi-yi)^2 / (xi+yi) ) / 2'''
     if len(l1)!=len(l2):
         print('your two vectors must have same length')
         sys.exit()
-    if (sum(l1)!=1) | (sum(l2)!=1):
+    if (sum(l1)<0.99) | (sum(l1)>1.0001) | (sum(l2)<0.99) & (sum(l2)>1.0001):
         print('your two vectors must be normalized (sumed to one)')
         sys.exit()
     d = sum([(l1[i]-l2[i])**2 / ((l1[i]+l2[i])+0.000000000001) for i in range(len(l1))])/2
     return(d)
+#m1 = [1,1,2,2,3,3,3,3]
+#m2 = [1,3,3,3,3,3,2,2]
+#l1 = [Counter(m1)[i]/len(m1) for i in range(1,nbr_topics+1)]
+#l2 = [Counter(m2)[i]/len(m2) for i in range(1,nbr_topics+1)]
+#chi2_distance(l1,l2)
 
 
 def string_similarity_proposition(s, li_s):
