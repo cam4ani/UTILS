@@ -1451,12 +1451,14 @@ def remove_isolated_index(li, isol):
 #li = [0,1,1,0,0,0,0,1,0,0,1,0,0,0,1]
 #remove_isolated_index(li,3)
 
+
 #GPU. 1-7%, processeur: 40-50%, mémoire GPU dédié: 3,3/4, mémoire GPU partagé: 0,1/7,9
 #we will save the video to have a visual, but later the purpose is to save representative images of detected fish
 #sorted(li_video_paths, reverse=True)
 def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, batch_size, 
+                      path_treated_vid=None, path_treated_img=None, path_treated_list=None,
                       save_video=True, save_images_3in1=False, save_images_lonely=False, save_full_video_with_text=False, debug=False,
-                      save_images_lonely_fromsmallervid=False, nbr_frames_ba=1, careful_index=1, perc_fps_2remove=35, 
+                      save_images_lonely_fromsmallervid=False, nbr_frames_ba=1, careful_index=1, perc_fps_2remove=0, 
                       img_end='.jpg', width=600, height=480, crf=10):
     
     '''    
@@ -1523,10 +1525,15 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     model_param_name = algo_name+'_c'+str(careful_index)+'n'+str(nbr_frames_ba)+'p'+str(perc_fps_2remove)
     
     #create path to save images and create name of smaller video
-    path_treated_vid = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 'processed_videos')
-    path_treated_img = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]),'processed_images', vid_name[:-4]+'_'+model_param_name)
-    path_treated_list = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 'processed_lists')
-    
+    #it saves all produces videos/img/list in given folders, when no folders path is givne,it will save in the fodler of the initial video
+    if path_treated_vid==None:
+        path_treated_vid = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 'processed_videos')
+    if path_treated_img==None:
+        path_treated_img = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]),'processed_images',
+                                        vid_name[:-4]+'_'+model_param_name)
+    if path_treated_list==None:
+        path_treated_list = os.path.join('\\'.join(path_initial_video.split('\\')[:-1]), 'processed_lists')
+
     path_img_treated_3in1 = os.path.join(path_treated_img, '3in1')
     path_img_treated_lonely = os.path.join(path_treated_img, 'lonely')
     path_img_treated_fsv = os.path.join(path_treated_img, 'image_from_smaller_video')
@@ -1735,14 +1742,14 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
             k3 = str(k-(len(li_img)-i)*3+3)
             proba_t = str('-'.join([str(round(l,3)) for l in pred[i]]))
             
-            #save the image used to detect fish (i.e. three images into one)
+            #save images used to detect fish (i.e. three images into one)
             if (pred_class=='fish') & (save_images_3in1):
-                imageio.imwrite(os.path.join(path_img_treated_3in1, k1+'_'+ k2+'_'+ k3+'_P'+proba_t+img_end), li_img[i])
+                imageio.imwrite(os.path.join(path_img_treated_3in1, vid_name+k1+'_'+ k2+'_'+ k3+'_P'+proba_t+img_end), li_img[i])
             
             if (pred_class=='fish') & (save_images_lonely):
-                imageio.imwrite(os.path.join(path_img_treated_lonely, k1+'_P'+proba_t+img_end), li_images[i*3])                   
-                imageio.imwrite(os.path.join(path_img_treated_lonely, k2+'_P'+proba_t+img_end), li_images[i*3+1])   
-                imageio.imwrite(os.path.join(path_img_treated_lonely, k3+'_P'+proba_t+img_end), li_images[i*3+2])   
+                imageio.imwrite(os.path.join(path_img_treated_lonely, vid_name+k1+'_P'+proba_t+img_end), li_images[i*3])                   
+                imageio.imwrite(os.path.join(path_img_treated_lonely, vid_name+k2+'_P'+proba_t+img_end), li_images[i*3+1])   
+                imageio.imwrite(os.path.join(path_img_treated_lonely, vid_name+k3+'_P'+proba_t+img_end), li_images[i*3+2])   
             
             #save absolutely all images one by one for verification (specifically for smaller video creation)
             if debug:
