@@ -1590,10 +1590,9 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
     li_index_savedimg = []
     li_sec_savedimg = []
     nbr_to_let = 5
-    
+
     #loop over frames from the video file stream
     while True:
-
         #grab the same nbr of images as the batchsize*3 (as it will then be reduced to a list of batchsize images)
         li_images = []
         for i in range(batch_size*3):
@@ -1601,34 +1600,37 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
             #but continue by adding necessary missing images to have the expected batchsize nbr 
             (grabbed, image) = video.read()
             if not grabbed:
-                break    
                 print('break')
+                break    
             k = k+1
             b,g,r = cv2.split(image)          
             image = cv2.merge([r,g,b])
             li_images.append(image)
-
+            
         ##################################################### detect fish #####################################################
         #add images to complete batch
         try:
-            li_images = li_images+[li_images[-1] for i in range(0,(batch_size*3)-len(li_images))]
+            li_images = li_images+[li_images[-1] for j in range(0,(batch_size*3)-len(li_images))]
             #adapt k as well
             k = batch_size*3*math.ceil(k/(batch_size*3)) #round to the next highest multiple of 75
 
             #construct one colored image from 3 consecutives images
-            li_img = [construct_3image_3channels(li_images[(i*3):(i*3+3)]) for i in range(batch_size)]
+            li_img = [construct_3image_3channels(li_images[(j*3):(j*3+3)]) for j in range(batch_size)]
             #detect fish (first put into adequate format)
             images = [cv2.resize(img,(img_cols,img_rows),interpolation=cv2.INTER_CUBIC) for img in li_img]
             images = [np.reshape(img,[1,img.shape[0],img.shape[1],3]) for img in images]
             images = np.vstack(images)
             pred = model.predict(images)
-            
         except Exception as e:
-            print('ERROR in predictiong fish: ', e)
+            print('ERROR in this video: ', path_initial_video)
+            print(e)
+            print('we will save it now with what it contain')
+            if something_saved:
+                writer.close()
             print(k)
             print(len(li_images))
-            pred = None
-            sys.exit()
+            return()
+            
         
         ################################################ save smaller video #################################################
         if (save_full_video_with_text==False) & (save_video):                   
