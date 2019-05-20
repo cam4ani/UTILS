@@ -544,7 +544,7 @@ def heatmap_img_2points(heatmap, img, precision, nbr):
     li_s = []
     for x, y in t:
         new_img = maskimg_bigger(img, h, w, where_points=(x,y))
-        #reaplce colored values to 1 (white) as that should not influecne the score
+        #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
         li_s.append(sum(sum(sum(cv2.multiply(new_img, heatmap)))))
 
@@ -571,7 +571,45 @@ def heatmap_img_2points(heatmap, img, precision, nbr):
 #    plt.imshow(new_test);
 
 
+def foreground_background_into1(background, foreground, mask=[]):
+    
+    '''will add the foreground image to the background image to create a new image
+    foreground image: this image must be either black where their is no mask otherwise the mask parameter must be specified
+    background image:  where we will add the mask
+    mask: binary mask with three channel (if froeground and background have three channels) if foreground image does not 
+    already contain this information
+    Note: not tested with mask'''
 
+    #create binary mask (needed to multiply with the backgound) from foreground image if not existing (replacing all value 
+    #bigger than 0 to 1)
+    if len(mask)==0:
+        _,mask = cv2.threshold(foreground,1,1,cv2.THRESH_BINARY)
+        
+    #verification
+    if foreground.shape!=background.shape:
+        raise Warning("the foreground is not of same shape as background, we will convert it")
+        
+    #resize foreground images to background one
+    foreground = imresize(foreground, size=background.shape)
+    
+    #if mask has one channel add two others
+    if mask.shape[2]!=3:
+        mask = skimage.color.gray2rgb(mask)
+
+        
+    #Convert to float
+    foreground = foreground.astype(float)
+    background = background.astype(float)
+    mask = mask.astype(float)
+
+    #add foreground to background
+    foreground = cv2.multiply(mask, foreground) 
+    background = cv2.multiply(1.0 - mask, background) #is the initial background with black where the mask of forground
+    outImage = cv2.add(foreground, background)
+
+    return(outImage.astype(np.uint8))
+    
+    
 
 #concatenate images one next to the other (i.e. to make nicer plot)
 def concat_images(img1, img2, g=15):
