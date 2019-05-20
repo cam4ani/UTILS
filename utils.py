@@ -1,16 +1,17 @@
+#keras dl
 import keras
 from keras.models import *
 from keras.layers import *
 from keras import backend as k
 from keras.optimizers import *
-import matplotlib.pyplot as plt
+
+#standard
 import os
 import pandas as pd
 import numpy as np
 import pickle
 import cv2
 import glob
-from PIL import Image
 import time
 import inflect
 import requests
@@ -24,6 +25,8 @@ import colorsys
 import operator
 import math
 import re
+import warnings
+
 #to match substring in string
 import fuzzysearch
 from fuzzysearch import find_near_matches
@@ -76,6 +79,10 @@ from urllib.request import urlopen
 #compute simple similarity between two images
 from skimage import measure
 from skimage.measure import compare_ssim
+#other image package
+from PIL import Image
+import skimage.draw
+import imutils
 
 #for data augmentation
 #import imgaug as ia
@@ -94,6 +101,14 @@ from skimage import color
 import matplotlib.cm as cm
 from matplotlib import pyplot as plt
 import matplotlib.patches as patches
+
+#COR utils
+PACKAGE_PARENT = '../..'
+SCRIPT_DIR = os.path.dirname(os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser('__file__'))))
+sys.path.append(os.path.normpath(os.path.join(SCRIPT_DIR, PACKAGE_PARENT)))
+
+sys.path.append('C:\\Users\\camil\\Desktop\\animals_code\\COREALIS')
+from FL_utils import pixel2cm, cm2pixel
 
 ###################################################################################################
 ###################################### download data from www #####################################
@@ -402,6 +417,161 @@ def from_chapter_to_structured_data(text, li_title):
 ###################################################################################################
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
+
+def reduceimagemask(image, masks):
+    '''from an image with it mask (as a list of tuple of x point list and y point list), il will return a small images 
+    with the mask and black around it
+    image: cv2 image
+    masks: [(li_x,li_y), (li_x,li_y),...], each tuple correspond to one mask'''
+    
+    #initialize the list with for the images to return
+    li_final_images = []
+    
+    #go throw each mask
+    for lix, liy in masks:
+        
+        #create a binary black and white three channel mask
+        mask = np.zeros([image.shape[0], image.shape[1]], dtype=np.uint8)
+        rr, cc = skimage.draw.polygon(liy, lix)
+        mask[rr, cc] = 1
+        mask = mask.astype(np.bool)
+        mask = skimage.color.gray2rgb(mask)
+
+        #create an image with black where there is no mask
+        img_fish = cv2.multiply(mask.astype(float), image.astype(float))
+        
+        #get the bbox measure
+        x1 = min(lix)
+        x2 = max(lix)
+        y1 = min(liy)
+        y2 = max(liy)
+        w = x2-x1
+        h = y2-y1
+        
+        #extract the bbox part from the image
+        li_final_images.append(img_fish[y1:y2,x1:x2,:].astype(np.uint8))
+        
+    return(li_final_images)
+
+
+
+def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0.2, p_Fliplr=0.4, p_Flipud=0.25,
+                                             v_dark_min=0.2, v_dark_max=0.4, p_cloud=0, p_bw=0, p_blur=0, li_sigma=[2]):
+    
+    ''' Function that augment an image without cremoving or adding pixel-information (i.e. if their is a chair, the chair
+    will always be totally present, even if we resive, rotate etc)'''
+    
+    #resize: smaller or bigger, keeping the image how it is   
+    li_resize_width = [int(cm2pixel(x)) for x in li_resize_width]
+    img = imutils.resize(image, width=random.sample(list(li_resize_width),1)[0])
+    
+    #rotation: with proba rot_angle_proba ensuring no part of the image is cut off, and ranodm angle between 10 and 350
+    li_rot_angle = list(np.repeat(0,100*(1-p_rot_angle)))
+    li_rot_angle.extend([random.randrange(10,350,1) for i in range(100-len(li_rot_angle))])
+    img = imutils.rotate_bound(img, random.sample(li_rot_angle, 1)[0])
+    
+    aug = iaa.Sequential([
+        
+        #flip horizontaly and vertically to make as if the fish was swimimg from both direction and from upside down
+        iaa.Fliplr(p_Fliplr), iaa.Flipud(p_Flipud),
+
+        #weather: clouds, fog, snowflakes & noise #iaa.Fog(),iaa.Snowflakes(density=(0.005, 0.025),flake_size=(0.2, 1.0))
+        iaa.Sometimes(p_cloud,iaa.Clouds()),
+        
+        #darkness/brightness: Multiply each image with a random value between v_dark_min and v_dark_max
+        iaa.Multiply((v_dark_min, v_dark_max)),
+        
+        #add gaussionblur (flou). bigger sigma --> more flou
+        iaa.Sometimes(p_blur, iaa.GaussianBlur(sigma=random.sample(list(li_sigma),1)[0]))
+    ])
+
+    img = aug.augment_image(img.astype(np.uint8))  
+    
+    #convert to black and white (random float x, 0.0 <= x < 1.0)
+    if random.random() < p_bw:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        #from black and white convert to 3 channel
+        img = skimage.color.gray2rgb(img)
+        
+    return(img)
+
+def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=()):
+    
+    '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
+    specify where to pu thte mask, then it will choose randomly so that the entire mask is still visible. One can also
+    add a heatmap of size w,h to give probability of where to put (some places must be more probable than others)
+    Note that we will be close to those proba, but it will still be an approximation: we will pick x random place, compute its
+    probable score, normalize so that all the x score sums to one, and choose according to the proba one place'''
+    
+    #verification of the use of parameter 
+    if (len(heatmap)==0) & (len(where_points)==0):
+        warnings.warn("You specified both heatmap and points, we will use the heatmap")
+    
+    #if no points and no heatmap specified, we will put the mask randomly without loosing any initial image part
+    if (len(heatmap)!=0) & (len(where_points)!=0):
+        x = random.sample(range(w-img.shape[1]-5), 1)[0]
+        y = random.sample(range(h-img.shape[0]-5), 1)[0]
+        
+    #if heatmap specified (one can construct heatmap based on available mask disposition for each species 
+    #e.g. usefull for blennie fluviatile)
+    elif len(heatmap)!=0:
+        x, y = heatmap_img_2points(heatmap, img, precision, 1)[0]
+        
+    #otherwise the heatmap was not specified and the points were, in which case we will use them
+    else:
+        x, y = where_points
+        
+    #black image of size w,h
+    black_img = np.zeros((h,w,3), np.uint8)
+
+    #match the x1,y1 points of the mask to the x,y points in the black image
+    black_img[y:y+img.shape[0], x:x+img.shape[1]] = img
+    
+    return(black_img)
+
+
+def heatmap_img_2points(heatmap, img, precision, nbr):
+    
+    '''From a probability heatmap and an image of smaller size, it will output a set of points (x,y) depending on the proba of
+    the heatmap'''
+    
+    #select randomly x (precision) number of points in the image
+    h, w = heatmap.shape[0:2]
+    #TODO: change so that not possible to have twice the same tuple
+    t = list(zip(random.choices(range(w-img.shape[1]-5), k=precision), random.choices(range(h-img.shape[0]-5), k=precision)))
+    
+    #put the image on the specific selected x,y points and compute its score when multiplied with the heatmap
+    li_s = []
+    for x, y in t:
+        new_img = maskimg_bigger(img, h, w, where_points=(x,y))
+        #reaplce colored values to 1 (white) as that should not influecne the score
+        _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
+        li_s.append(sum(sum(sum(cv2.multiply(new_img, heatmap)))))
+
+    #normalize the score so that they sumed to 1 --> proba
+    li_p = [x/sum(li_s) for x in li_s]
+    
+    #choose according to the probability nbr points
+    li_choose_index = np.random.choice(range(precision), nbr, p=li_p)
+    li_points = [t[i] for i in li_choose_index]
+    
+    return(li_points)
+#small examples
+#1.
+#heatmap = 255*np.ones((480,600,3), np.uint8)
+#heatmap[300:, :, :] = 0 ; heatmap[:200, :, :] = 0 ; heatmap[:, :200, :] = 0 ; heatmap[:, 400:, :] = 0
+#2.
+#heatmap = np.zeros((480,600,3), np.uint8)
+#heatmap[400:, :, :] = 255 ; heatmap[:100, :, :] = 255 ; heatmap[:, :100, :] = 255 ; heatmap[:, 500:, :] = 255 
+#plt.imshow(heatmap);
+#li_points = heatmap_img_2points(heatmap, aug_img, 10, 1)
+#for x,y in li_points:
+#    print(x,y)
+#    new_test = maskimg_bigger(aug_img, 480,600, where_points=(x,y))
+#    plt.imshow(new_test);
+
+
+
 
 #concatenate images one next to the other (i.e. to make nicer plot)
 def concat_images(img1, img2, g=15):
@@ -1630,7 +1800,6 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
             print(k)
             print(len(li_images))
             return()
-            
         
         ################################################ save smaller video #################################################
         if (save_full_video_with_text==False) & (save_video):                   
