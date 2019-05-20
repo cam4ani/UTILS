@@ -83,6 +83,7 @@ from skimage.measure import compare_ssim
 from PIL import Image
 import skimage.draw
 import imutils
+from scipy.misc import imresize
 
 #for data augmentation
 #import imgaug as ia
