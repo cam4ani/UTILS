@@ -420,7 +420,7 @@ def from_chapter_to_structured_data(text, li_title):
 ###################################################################################################
 
 def reduceimagemask(image, masks):
-    '''from an image with it mask (as a list of tuple of x point list and y point list), il will return a small images 
+    '''from an image with it mask (as a list of tuple of x point list and y point list), it will return a smaller image 
     with the mask and black around it
     image: cv2 image
     masks: [(li_x,li_y), (li_x,li_y),...], each tuple correspond to one mask'''
@@ -572,16 +572,21 @@ def heatmap_img_2points(heatmap, img, precision, nbr):
 #    plt.imshow(new_test);
 
 
-def foreground_background_into1(background, foreground, mask=[]):
+def foreground_background_into1(background, foreground, with_smooth=True, thickness=3, alphaMASK=0.9, 
+                                alphaBG=0.9, mask=[]):
     
-    '''will add the foreground image to the background image to create a new image
-    foreground image: this image must be either black where their is no mask otherwise the mask parameter must be specified
-    background image:  where we will add the mask
-    mask: binary mask with three channel (if froeground and background have three channels) if foreground image does not 
-    already contain this information
+    '''will add the foreground image to the background image to create a new image, with smooth intersection
+    -foreground image: this image must be either black where there is no mask, or the mask parameter must be specified in 
+    the mask parameter
+    -background image:  image on which we will add the mask
+    -mask: binary mask if foreground image does not already contain this information
+    
     Note: not tested with mask'''
 
-    #create binary mask (needed to multiply with the backgound) from foreground image if not existing (replacing all value 
+    #make a copy for the smooth part
+    img = foreground.copy()
+    
+    #create binary mask (as needed to multiply with the backgound) from foreground image if not existing (replacing all value 
     #bigger than 0 to 1)
     if len(mask)==0:
         _,mask = cv2.threshold(foreground,1,1,cv2.THRESH_BINARY)
@@ -589,26 +594,39 @@ def foreground_background_into1(background, foreground, mask=[]):
     #verification
     if foreground.shape!=background.shape:
         raise Warning("the foreground is not of same shape as background, we will convert it")
-        
-    #resize foreground images to background one
-    foreground = imresize(foreground, size=background.shape)
+        foreground = imresize(foreground, size=background.shape)
     
     #if mask has one channel add two others
-    if mask.shape[2]!=3:
+    if len(mask.shape)==2:
         mask = skimage.color.gray2rgb(mask)
 
-        
-    #Convert to float
+    #add foreground to background
     foreground = foreground.astype(float)
     background = background.astype(float)
     mask = mask.astype(float)
-
-    #add foreground to background
-    foreground = cv2.multiply(mask, foreground) 
-    background = cv2.multiply(1.0 - mask, background) #is the initial background with black where the mask of forground
+    foreground = cv2.multiply(mask-(1-alphaMASK), foreground) 
+    background = cv2.multiply(alphaBG - mask, background) #is the initial background with black where the mask of forground
     outImage = cv2.add(foreground, background)
+    result = outImage.astype(np.uint8)
+    
+    if with_smooth:
+        
+        #find contour
+        foreground_gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+        ret,thresh = cv2.threshold(foreground_gray,1,255,0)
+        _, contours, __ = cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
 
-    return(outImage.astype(np.uint8))
+        #create intersection_mask
+        intersection_mask = cv2.drawContours(np.zeros(foreground.shape, np.uint8),
+                                             contours,-1,(0,255,0),thickness)
+        
+        #inpaint the contour in the first final image
+        intersection_mask = cv2.cvtColor(intersection_mask, cv2.COLOR_BGR2GRAY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1,1))
+        intersection_mask = cv2.dilate(intersection_mask, kernel, iterations=1)
+        result = cv2.inpaint(result,intersection_mask,1,cv2.INPAINT_TELEA)
+
+    return(result)
     
     
 
