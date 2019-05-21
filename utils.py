@@ -457,7 +457,7 @@ def reduceimagemask(image, masks):
 
 
 def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0.2, p_Fliplr=0.4, p_Flipud=0.25,
-                                             v_dark_min=0.2, v_dark_max=0.4, p_cloud=0, p_bw=0, p_blur=0, li_sigma=[2]):
+                             v_dark_min=0.2, v_dark_max=0.4, p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2]):
     
     ''' Function that augment an image without cremoving or adding pixel-information (i.e. if their is a chair, the chair
     will always be totally present, even if we resive, rotate etc)'''
@@ -479,11 +479,12 @@ def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0.2, p_Fliplr=0
         #weather: clouds, fog, snowflakes & noise #iaa.Fog(),iaa.Snowflakes(density=(0.005, 0.025),flake_size=(0.2, 1.0))
         iaa.Sometimes(p_cloud,iaa.Clouds()),
         
-        #darkness/brightness: Multiply each image with a random value between v_dark_min and v_dark_max
+        #darkness/brightness: Multiply each image with a random value between v_dark_min and v_dark_max (smaller than 0 will
+        #make it darker
         iaa.Multiply((v_dark_min, v_dark_max)),
         
         #add gaussionblur (flou). bigger sigma --> more flou
-        iaa.Sometimes(p_blur, iaa.GaussianBlur(sigma=random.sample(list(li_sigma),1)[0]))
+        iaa.Sometimes(p_blur, iaa.GaussianBlur(sigma=random.sample(list(li_sigma_blur),1)[0]))
     ])
 
     img = aug.augment_image(img.astype(np.uint8))  
@@ -496,7 +497,9 @@ def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0.2, p_Fliplr=0
         
     return(img)
 
-def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=()):
+def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where_points=(), nbr=1,
+                   p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, li_sigma_blur=[0.2],
+                   p_Fliplr=0.4, p_Flipud=0.25):
     
     '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
     specify where to pu thte mask, then it will choose randomly so that the entire mask is still visible. One can also
@@ -507,6 +510,12 @@ def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=()):
     #verification of the use of parameter 
     if (len(heatmap)==0) & (len(where_points)==0):
         warnings.warn("You specified both heatmap and points, we will use the heatmap")
+       
+            
+    #augment the mask except the size and rotation so that the place can still be correct (as it is based on the w&h of the mask)
+    img = image_aug_keepingallinfo(image=img, li_resize_width=[int(pixel2cm(img.shape[1]))], p_rot_angle=0, 
+                                   p_Fliplr=p_Fliplr, p_Flipud=p_Flipud, v_dark_min=v_dark_min, v_dark_max=v_dark_max,
+                                   p_cloud=p_cloud, p_bw=p_bw, p_blur=p_blur, li_sigma_blur=li_sigma_blur)
     
     #if no points and no heatmap specified, we will put the mask randomly without loosing any initial image part
     if (len(heatmap)!=0) & (len(where_points)!=0):
@@ -516,7 +525,15 @@ def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=()):
     #if heatmap specified (one can construct heatmap based on available mask disposition for each species 
     #e.g. usefull for blennie fluviatile)
     elif len(heatmap)!=0:
-        x, y = heatmap_img_2points(heatmap, img, precision, 1)[0]
+        l = heatmap_img_2points(heatmap, img, precision, nbr, li_resize_width,
+                                p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min,
+                                v_dark_max=v_dark_max, p_blur=p_blur, li_sigma_blur=li_sigma_blur)
+        li_black_img = []
+        for x,y in l:
+            li_black_img.extend(maskimg_bigger(img, h, w, li_resize_width, precision=precision, where_points=(x,y), nbr=1,
+                                               p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min,
+                                               v_dark_max=v_dark_max, p_blur=p_blur, li_sigma_blur=li_sigma_blur))
+        return(li_black_img)
         
     #otherwise the heatmap was not specified and the points were, in which case we will use them
     else:
@@ -528,10 +545,11 @@ def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=()):
     #match the x1,y1 points of the mask to the x,y points in the black image
     black_img[y:y+img.shape[0], x:x+img.shape[1]] = img
     
-    return(black_img)
+    return([black_img])
 
 
-def heatmap_img_2points(heatmap, img, precision, nbr):
+def heatmap_img_2points(heatmap, img, precision, nbr, li_resize_width, p_rot_angle, p_cloud, p_bw, 
+                        v_dark_min, v_dark_max, p_blur, li_sigma_blur):
     
     '''From a probability heatmap and an image of smaller size, it will output a set of points (x,y) depending on the proba of
     the heatmap'''
@@ -544,7 +562,9 @@ def heatmap_img_2points(heatmap, img, precision, nbr):
     #put the image on the specific selected x,y points and compute its score when multiplied with the heatmap
     li_s = []
     for x, y in t:
-        new_img = maskimg_bigger(img, h, w, where_points=(x,y))
+        new_img = maskimg_bigger(img=img, h=h, w=w, li_resize_width=li_resize_width, precision=precision, where_points=(x,y), nbr=1,
+                                 p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min,
+                                 v_dark_max=v_dark_max, p_blur=p_blur, li_sigma_blur=li_sigma_blur)[0]
         #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
         li_s.append(sum(sum(sum(cv2.multiply(new_img, heatmap)))))
