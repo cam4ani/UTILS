@@ -456,11 +456,13 @@ def reduceimagemask(image, masks):
 
 
 
-def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0.2, p_Fliplr=0.4, p_Flipud=0.25,
-                             v_dark_min=0.2, v_dark_max=0.4, p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2]):
+def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0, p_Fliplr=0, p_Flipud=0,
+                             v_dark_min=1, v_dark_max=1, p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2]):
     
-    ''' Function that augment an image without cremoving or adding pixel-information (i.e. if their is a chair, the chair
-    will always be totally present, even if we resive, rotate etc)'''
+    ''' Function that augment an image without removing or adding pixel-information (i.e. if their is a chair, the chair
+    will always be totally present, even if we resive, rotate etc). Attention l'output n'aura plus forcement du noir à l'extérieur du
+    mask'''
+    
     
     #resize: smaller or bigger, keeping the image how it is   
     li_resize_width = [int(cm2pixel(x)) for x in li_resize_width]
@@ -497,9 +499,10 @@ def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0.2, p_Fliplr=0
         
     return(img)
 
+
 def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where_points=(), nbr=1,
-                   p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, li_sigma_blur=[0.2],
-                   p_Fliplr=0.4, p_Flipud=0.25):
+                   p_rot_angle=0, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, li_sigma_blur=[0.2],
+                   p_Fliplr=0, p_Flipud=0):
     
     '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
     specify where to pu thte mask, then it will choose randomly so that the entire mask is still visible. One can also
@@ -516,7 +519,7 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
     img = image_aug_keepingallinfo(image=img, li_resize_width=[int(pixel2cm(img.shape[1]))], p_rot_angle=0, 
                                    p_Fliplr=p_Fliplr, p_Flipud=p_Flipud, v_dark_min=v_dark_min, v_dark_max=v_dark_max,
                                    p_cloud=p_cloud, p_bw=p_bw, p_blur=p_blur, li_sigma_blur=li_sigma_blur)
-    
+
     #if no points and no heatmap specified, we will put the mask randomly without loosing any initial image part
     if (len(heatmap)!=0) & (len(where_points)!=0):
         x = random.sample(range(w-img.shape[1]-5), 1)[0]
@@ -647,8 +650,49 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
         result = cv2.inpaint(result,intersection_mask,1,cv2.INPAINT_TELEA)
 
     return(result)
+ 
     
+def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, nbr, li_resize_width,  
+                       alphaMASK=0.85, alphaBG=0.9, thickness=2, p_Fliplr=0.4, p_Flipud=0.25,
+                       p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, 
+                       li_sigma_blur=[0.2], heatmap=[]):
+    '''joign two images together a background and a foreground with its mask
+    li_masks_foreground: list of tuples: [(li_x,li_y), ]
     
+    ATTENTION comme la fct "image_aug_keepingallinfo" retourne une image plus forcement avec du noir aprtout autour du 
+    masque, il faut faire attention à ne pas changer le noir en une autre couleur
+    --> v_dark_min> 0.8
+    --> p_cloud=0'''
+    
+    ############################# create bbox image with only mask - FCT1 #############################
+    images_mask = reduceimagemask(image=foreground, masks=li_masks_foreground)
+    if len(images_mask)==1:
+        image_mask = images_mask[0]
+    else:
+        raise Warning('There is several masks, choose one') #TODO: improve to make it more general
+
+    ###################################### augment masks - FCT2 #######################################    
+    #augment only the size and rotation
+    image_mask_aug = image_aug_keepingallinfo(image=image_mask, li_resize_width=li_resize_width, p_rot_angle=0.2)   
+        
+    ######################### choose place for the mask to be added - FCT3 ##########################    
+    #choose some places for this specific mask size and augment in a different way for each place 
+    #(except rotation and size as this might change the place possibility)
+    h,w,_ = background.shape
+    li_image_mask_aug_sized = maskimg_bigger(image_mask_aug, h=h, w=w, li_resize_width=li_resize_width, 
+                                             heatmap=heatmap, precision=heatmap_precision, nbr=nbr, 
+                                             p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, 
+                                             v_dark_min=v_dark_min, v_dark_max=v_dark_max, p_blur=p_blur, 
+                                             li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, p_Flipud=p_Flipud)
+
+    #################################### join both images - FCT4 ###################################    
+    li_img_final = []
+    for image_mask_aug_sized in li_image_mask_aug_sized:
+        li_img_final.append(foreground_background_into1(background, image_mask_aug_sized, thickness=thickness, 
+                                                        alphaMASK=alphaMASK, alphaBG=alphaBG))
+    return(li_img_final)
+
+
 
 #concatenate images one next to the other (i.e. to make nicer plot)
 def concat_images(img1, img2, g=15):
