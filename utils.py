@@ -455,12 +455,13 @@ def reduceimagemask(image, masks):
     return(li_final_images)
 
 
-
 def image_aug_keepingallinfo(image, li_resize_width, p_rot_angle=0, p_Fliplr=0, p_Flipud=0,
                              v_dark_min=1, v_dark_max=1, p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2]):
     
-    ''' Function that augment an image without removing or adding pixel-information (i.e. if their is a chair, the chair
-    will always be totally present, even if we resive, rotate etc). Attention l'output n'aura plus forcement du noir à l'extérieur du
+    ''' TODO: augmentation with masks!!! to keep black pixel balck after any augmentation!!
+    Function that augment an image without removing or adding pixel-information (i.e. if their is a chair, the chair
+    will always be totally present, even if we resive, rotate etc). For now: attention, l'output n'aura plus forcement du noir 
+    à l'extérieur du
     mask'''
     
     
@@ -549,6 +550,17 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
     black_img[y:y+img.shape[0], x:x+img.shape[1]] = img
     
     return([black_img])
+
+
+def heatmap_maskoccurences(background, c=60):
+    '''From a background image, it will produce a heatmap showing with higher value (but not normalized) where there
+    is more porbability where there seems to have no contour (if c param is high)
+    FL RUles:probability higher when the pixel is brighter & probability=0 for the top 35 rows and las 35 rows'''
+    background_gray = cv2.cvtColor(background,cv2.COLOR_BGR2GRAY)
+    background_gray[0:c,:] = 0
+    background_gray[-c:,:] = 0
+    background_gray = skimage.color.gray2rgb(background_gray)
+    return(background_gray)
 
 
 def heatmap_img_2points(heatmap, img, precision, nbr, li_resize_width, p_rot_angle, p_cloud, p_bw, 
