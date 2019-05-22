@@ -473,8 +473,11 @@ def hook(images, augmenter, parents, default):
 def image_aug_keepingallinfo(image, mask, li_resize_width, p_rot_angle=0, p_Fliplr=0, p_Flipud=0,
                              v_dark_min=1, v_dark_max=1, p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2]):
     
-    ''' Function that augment an image without removing or adding pixel-information (i.e. if their is a chair, the chair
-    will always be totally present, even if we resive, rotate etc)'''
+    ''' TODO: augmentation with masks!!! to keep black pixel balck after any augmentation!!
+    Function that augment an image without removing or adding pixel-information (i.e. if their is a chair, the chair
+    will always be totally present, even if we resive, rotate etc). For now: attention, l'output n'aura plus forcement du noir 
+    à l'extérieur du
+    mask'''
     
     #resize: smaller or bigger, keeping the image how it is   
     li_resize_width = [int(cm2pixel(x)) for x in li_resize_width]
@@ -523,10 +526,12 @@ def image_aug_keepingallinfo(image, mask, li_resize_width, p_rot_angle=0, p_Flip
     #use mask to convert the image again to black where their is no mask
     img = cv2.multiply(img.astype(float), mask.astype(float))
     
-    return(img.astype(np.uint8))
+    return(img, mask)
 
 
-def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where_points=(), nbr=1):
+def maskimg_bigger(img, mask, h, w, li_resize_width, precision=1000, heatmap=[], where_points=(), nbr=1,
+                   p_rot_angle=0, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, li_sigma_blur=[0.2],
+                   p_Fliplr=0, p_Flipud=0):
     
     '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
     specify where to pu thte mask, then it will choose randomly so that the entire mask is still visible. One can also
@@ -537,7 +542,12 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
     #verification of the use of parameter 
     if (len(heatmap)==0) & (len(where_points)==0):
         warnings.warn("You specified both heatmap and points, we will use the heatmap")
-           
+            
+    #augment the mask except the size and rotation so that the place can still be correct (as it is based on the w&h of the mask)
+    img, mask = image_aug_keepingallinfo(image=img, mask=mask, li_resize_width=[int(pixel2cm(img.shape[1]))], p_rot_angle=0, 
+                                   p_Fliplr=p_Fliplr, p_Flipud=p_Flipud, v_dark_min=v_dark_min, v_dark_max=v_dark_max,
+                                   p_cloud=p_cloud, p_bw=p_bw, p_blur=p_blur, li_sigma_blur=li_sigma_blur)
+
     #if no points and no heatmap specified, we will put the mask randomly without loosing any initial image part
     if (len(heatmap)!=0) & (len(where_points)!=0):
         x = random.sample(range(w-img.shape[1]-5), 1)[0]
@@ -546,10 +556,14 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
     #if heatmap specified (one can construct heatmap based on available mask disposition for each species 
     #e.g. usefull for blennie fluviatile)
     elif len(heatmap)!=0:
-        l = heatmap_img_2points(heatmap, img, precision, li_resize_width)
+        l = heatmap_img_2points(heatmap, img, mask, precision, nbr, li_resize_width,
+                                p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min,
+                                v_dark_max=v_dark_max, p_blur=p_blur, li_sigma_blur=li_sigma_blur)
         li_black_img = []
         for x,y in l:
-            li_black_img.extend(maskimg_bigger(img, h, w, li_resize_width, precision=precision, where_points=(x,y), nbr=1))
+            li_black_img.extend(maskimg_bigger(img, mask, h, w, li_resize_width, precision=precision, where_points=(x,y), nbr=1,
+                                               p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min,
+                                               v_dark_max=v_dark_max, p_blur=p_blur, li_sigma_blur=li_sigma_blur))
         return(li_black_img)
         
     #otherwise the heatmap was not specified and the points were, in which case we will use them
@@ -567,8 +581,8 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
 
 def heatmap_maskoccurences(background, c=60):
     '''From a background image, it will produce a heatmap showing with higher value (but not normalized) where there
-    is more probability where there seems to have no contour (if c param is high)
-    FL Rules:probability higher when the pixel is brighter & probability=0 for the top 35 rows and las 35 rows'''
+    is more porbability where there seems to have no contour (if c param is high)
+    FL RUles:probability higher when the pixel is brighter & probability=0 for the top 35 rows and las 35 rows'''
     background_gray = cv2.cvtColor(background,cv2.COLOR_BGR2GRAY)
     background_gray[0:c,:] = 0
     background_gray[-c:,:] = 0
@@ -576,7 +590,8 @@ def heatmap_maskoccurences(background, c=60):
     return(background_gray)
 
 
-def heatmap_img_2points(heatmap, img, precision, li_resize_width, nbr=1):
+def heatmap_img_2points(heatmap, img, mask, precision, nbr, li_resize_width, p_rot_angle, p_cloud, p_bw, 
+                        v_dark_min, v_dark_max, p_blur, li_sigma_blur):
     
     '''From a probability heatmap and an image of smaller size, it will output a set of points (x,y) depending on the proba of
     the heatmap'''
@@ -589,8 +604,10 @@ def heatmap_img_2points(heatmap, img, precision, li_resize_width, nbr=1):
     #put the image on the specific selected x,y points and compute its score when multiplied with the heatmap
     li_s = []
     for x, y in t:
-        new_img = maskimg_bigger(img=img, h=h, w=w, li_resize_width=li_resize_width, precision=precision, 
-                                 where_points=(x,y), nbr=1)[0]
+        new_img = maskimg_bigger(img=img, mask=mask, h=h, w=w, li_resize_width=li_resize_width, precision=precision, 
+                                 where_points=(x,y), nbr=1,
+                                 p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min,
+                                 v_dark_max=v_dark_max, p_blur=p_blur, li_sigma_blur=li_sigma_blur)[0]
         #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
         li_s.append(sum(sum(sum(cv2.multiply(new_img, heatmap)))))
@@ -618,7 +635,8 @@ def heatmap_img_2points(heatmap, img, precision, li_resize_width, nbr=1):
 #    plt.imshow(new_test);
 
 
-def foreground_background_into1(background, foreground, with_smooth=True, thickness=3, alphaMASK=0.9, alphaBG=0.9, mask=[]):
+def foreground_background_into1(background, foreground, with_smooth=True, thickness=3, alphaMASK=0.9, 
+                                alphaBG=0.9, mask=[]):
     
     '''will add the foreground image to the background image to create a new image, with smooth intersection
     -foreground image: this image must be either black where there is no mask, or the mask parameter must be specified in 
@@ -674,12 +692,17 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
     return(result)
  
     
-def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width,  
+def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, nbr, li_resize_width,  
                        alphaMASK=0.85, alphaBG=0.9, thickness=2, p_Fliplr=0.4, p_Flipud=0.25,
                        p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, 
                        li_sigma_blur=[0.2], heatmap=[]):
-    '''joing two images together a background and a foreground with its mask
-    li_masks_foreground: list of tuples: [(li_x,li_y), ]'''
+    '''joign two images together a background and a foreground with its mask
+    li_masks_foreground: list of tuples: [(li_x,li_y), ]
+    
+    ATTENTION comme la fct "image_aug_keepingallinfo" retourne une image plus forcement avec du noir aprtout autour du 
+    masque, il faut faire attention à ne pas changer le noir en une autre couleur
+    --> v_dark_min> 0.8
+    --> p_cloud=0'''
     
     ############################# create bbox image with only mask - FCT1 #############################
     images_mask, masks = reduceimagemask(image=foreground, masks=li_masks_foreground)
@@ -690,17 +713,18 @@ def new_image_creation(background, foreground, li_masks_foreground, heatmap_prec
         raise Warning('There is several masks, choose one') #TODO: improve to make it more general
 
     ###################################### augment masks - FCT2 #######################################    
-    #augment image
-    image_mask_aug = image_aug_keepingallinfo(image=image_mask, mask=mask, li_resize_width=li_resize_width, p_rot_angle=0.2,
-                                                    p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min, v_dark_max=v_dark_max, 
-                                                    p_blur=p_blur, li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, p_Flipud=p_Flipud)   
+    #augment only the size and rotation
+    image_mask_aug, mask = image_aug_keepingallinfo(image=image_mask, mask=mask, li_resize_width=li_resize_width, p_rot_angle=0.2)   
         
-    ######################### choose a place for the mask to be added - FCT3 ##########################    
+    ######################### choose place for the mask to be added - FCT3 ##########################    
     #choose some places for this specific mask size and augment in a different way for each place 
     #(except rotation and size as this might change the place possibility)
     h,w,_ = background.shape
-    li_image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, li_resize_width=li_resize_width, 
-                                             heatmap=heatmap, precision=heatmap_precision)
+    li_image_mask_aug_sized = maskimg_bigger(image_mask_aug, mask, h=h, w=w, li_resize_width=li_resize_width, 
+                                             heatmap=heatmap, precision=heatmap_precision, nbr=nbr, 
+                                             p_rot_angle=p_rot_angle, p_cloud=p_cloud, p_bw=p_bw, 
+                                             v_dark_min=v_dark_min, v_dark_max=v_dark_max, p_blur=p_blur, 
+                                             li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, p_Flipud=p_Flipud)
 
     #################################### join both images - FCT4 ###################################    
     li_img_final = []
