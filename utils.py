@@ -618,7 +618,7 @@ def heatmap_img_2points(heatmap, img, precision, li_resize_width, nbr=1):
 #    plt.imshow(new_test);
 
 
-def foreground_background_into1(background, foreground, with_smooth=True, thickness=3, alphaMASK=0.9, alphaBG=0.9, mask=[]):
+def foreground_background_into1(background, foreground, with_smooth=True, thickness=3, mask=[]):
     
     '''will add the foreground image to the background image to create a new image, with smooth intersection
     -foreground image: this image must be either black where there is no mask, or the mask parameter must be specified in 
@@ -649,10 +649,15 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
     foreground = foreground.astype(float)
     background = background.astype(float)
     mask = mask.astype(float)
-    foreground = cv2.multiply(mask-(1-alphaMASK), foreground) 
-    background = cv2.multiply(alphaBG - mask, background) #is the initial background with black where the mask of forground
+    foreground = cv2.multiply(mask, foreground) 
+    background = cv2.multiply(1 - mask, background) #is the initial background with black where the mask of forground
     outImage = cv2.add(foreground, background)
     result = outImage.astype(np.uint8)
+    
+    #add foreground to background unsing alpha blending of PIL
+    #foreground = Image.fromarray(foreground)
+    #background = Image.fromarray(background)
+    #result = Image.blend(background, foreground, alpha=alpha)
     
     if with_smooth:
         
@@ -674,8 +679,8 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
     return(result)
  
     
-def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width,  
-                       alphaMASK=0.85, alphaBG=0.9, thickness=2, p_Fliplr=0.4, p_Flipud=0.25,
+def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width,
+                       thickness=2, p_Fliplr=0.4, p_Flipud=0.25,
                        p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, 
                        li_sigma_blur=[0.2], heatmap=[]):
     '''joing two images together a background and a foreground with its mask
@@ -688,26 +693,33 @@ def new_image_creation(background, foreground, li_masks_foreground, heatmap_prec
         mask = masks[0]
     else:
         raise Warning('There is several masks, choose one') #TODO: improve to make it more general
+    #plt.imshow(image_mask)
+    #plt.show()
 
     ###################################### augment masks - FCT2 #######################################    
     #augment image
     image_mask_aug = image_aug_keepingallinfo(image=image_mask, mask=mask, li_resize_width=li_resize_width, p_rot_angle=0.2,
                                                     p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min, v_dark_max=v_dark_max, 
-                                                    p_blur=p_blur, li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, p_Flipud=p_Flipud)   
-        
+                                                    p_blur=p_blur, li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, 
+                                              p_Flipud=p_Flipud)   
+    #plt.imshow(image_mask_aug)
+    #plt.show()    
+    
     ######################### choose a place for the mask to be added - FCT3 ##########################    
     #choose some places for this specific mask size and augment in a different way for each place 
     #(except rotation and size as this might change the place possibility)
     h,w,_ = background.shape
     li_image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, li_resize_width=li_resize_width, 
                                              heatmap=heatmap, precision=heatmap_precision)
-
+ 
     #################################### join both images - FCT4 ###################################    
     li_img_final = []
-    for image_mask_aug_sized in li_image_mask_aug_sized:
-        li_img_final.append(foreground_background_into1(background, image_mask_aug_sized, thickness=thickness, 
-                                                        alphaMASK=alphaMASK, alphaBG=alphaBG))
+    for image_mask_aug_sized in li_image_mask_aug_sized:  
+        img_final = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
+        li_img_final.append(img_final)
+
     return(li_img_final)
+
 
 
 
@@ -1823,8 +1835,8 @@ def reduce_video_size(path_initial_video, algo_name, model, img_cols, img_rows, 
         
     #small test:  check if video exists
     if len(glob.glob(path_initial_video))!=1:
-        print('the video does not exist at your path')
-        sys.exit()
+        print('ERROR: the video does not exist at your path')
+        return
         
     #info
     dico_classid_classname = {0:'no-fish', 1:'fish'}
