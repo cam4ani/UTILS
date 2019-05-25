@@ -427,7 +427,7 @@ def image_aug(image,p_histonorm=0):
     return(image)
 
 def reduceimagemask(image, masks):
-    '''from an image with it mask (as a list of tuple of x point list and y point list), it will return a smaller image 
+    '''from an image with its masks (as a list of tuple of x point list and y point list), it will return a smaller image 
     with the mask and black around it
     image: cv2 image
     masks: [(li_x,li_y), (li_x,li_y),...], each tuple correspond to one mask'''
@@ -588,7 +588,7 @@ def enough_white(background_g, background_gray, it_white, it_black):
     #TODO: optimise!
     nbr_non_zero_value_pixel = np.sum(background_g != 0)
     if nbr_non_zero_value_pixel < 5000:
-        print('note enough white pixel:', nbr_non_zero_value_pixel)
+        #print('note enough white pixel:', nbr_non_zero_value_pixel)
         it_white = int(it_white*0.7)
         background_g = cv2.erode(background_gray, None, iterations=it_white)
         background_g = cv2.dilate(background_g, None, iterations=it_black)
@@ -615,7 +615,7 @@ def heatmap_maskoccurences(background, c=60, it_white=40, it_black=5, specific_p
         ### then detect white spot
         #reduce the area of white pixel
         background_g = cv2.erode(background_gray, None, iterations=it_white)
-        #remove small area of balck value inside white area
+        #remove small area of black value inside white area
         background_g = cv2.dilate(background_g, None, iterations=it_black)
         #verify if enough non-zero values black pixel
         background_g = enough_white(background_g, background_gray, it_white, it_black)
@@ -729,8 +729,8 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
 
     return(result)
  
-    
-def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[],
+############## NEW IMAGE CREATION
+def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[],
                        thickness=2, p_Fliplr=0.4, p_Flipud=0.25, p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, 
                        p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1):
     '''joining two images together a background and a foreground with one mask
@@ -774,7 +774,7 @@ def new_image_creation(background, foreground, li_masks_foreground, heatmap_prec
 
 
 
-def MultipleMaskAugmentation_small_rotation(foreground, background, li_masks, thickness=2, delta=0):
+def NewImage_MultipleMaskAugmentationRotation(foreground, background, li_masks, thickness=2, heatmap_precision=1000):
     '''from one foreground with multiple mask and a background, it will put the foreground mask with random rotation to each
     mask on the background'''
     for m in li_masks:
@@ -784,19 +784,25 @@ def MultipleMaskAugmentation_small_rotation(foreground, background, li_masks, th
 
         ###################################### augment masks - FCT2 #######################################    
         #augment image
-        image_mask_aug = image_aug_keepingallinfo(image=images_mask[0], mask=masks[0], p_rot_angle=1,
+        image_mask_aug = image_aug_keepingallinfo(image=images_mask[0], mask=masks[0], p_rot_angle=0.2,
                                                  v_dark_min=0.7, v_dark_max=1.3, p_Fliplr=0.3, p_Flipud=0.2,
                                                  p_contrast=0.3, v_min_contrast=0.6, v_max_contrast=1.4)      
 
         ######################### choose a place for the mask to be added - FCT3 ##########################    
         h,w,_ = background.shape
-        image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, where_points=(min(m[0]),min(m[1])), nbr=1)[0]
+        image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, where_points=(min(m[0]),min(m[1])), nbr=1,
+                                             precision=heatmap_precision)[0]
 
         #################################### join both images - FCT4 ###################################    
         background = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
 
     return(background)
-    
+
+
+##############
+
+
+
 
 #concatenate images one next to the other (i.e. to make nicer plot)
 def concat_images(img1, img2, g=15):
