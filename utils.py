@@ -419,12 +419,19 @@ def from_chapter_to_structured_data(text, li_title):
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
+def image_aug(image,p_histonorm=0):
+    #standard histogram equalization
+    aug = iaa.Sometimes(p_histonorm,iaa.HistogramEqualization())
+    image = aug.augment_image(image)
+    
+    return(image)
+
 def reduceimagemask(image, masks):
     '''from an image with it mask (as a list of tuple of x point list and y point list), it will return a smaller image 
     with the mask and black around it
     image: cv2 image
     masks: [(li_x,li_y), (li_x,li_y),...], each tuple correspond to one mask'''
-    
+        
     #initialize the list with for the images to return
     li_final_images = []
     li_final_masks = []
@@ -470,23 +477,25 @@ def hook(images, augmenter, parents, default):
     return augmenter.__class__.__name__ in MASK_AUGMENTERS
 
 
-def image_aug_keepingallinfo(image, mask, li_resize_width, p_rot_angle=0, p_Fliplr=0, p_Flipud=0,
-                             v_dark_min=1, v_dark_max=1, p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2]):
+def image_aug_keepingallinfo(image, mask, li_resize_width=[], p_rot_angle=0, p_Fliplr=0, p_Flipud=0, v_dark_min=1, v_dark_max=1,
+                             p_cloud=0, p_bw=0, p_blur=0, li_sigma_blur=[2], p_contrast=0, v_min_contrast=1, v_max_contrast=1):
     
     ''' Function that augment an image without removing or adding pixel-information (i.e. if their is a chair, the chair
     will always be totally present, even if we resive, rotate etc)'''
     
     #resize: smaller or bigger, keeping the image how it is   
-    li_resize_width = [int(cm2pixel(x)) for x in li_resize_width]
-    width_ = random.sample(list(li_resize_width),1)[0]
-    img = imutils.resize(image, width=width_)
-    mask = imutils.resize(mask, width=width_)
+    if len(li_resize_width)>0:
+        li_resize_width = [int(cm2pixel(x)) for x in li_resize_width]
+        width_ = random.sample(list(li_resize_width),1)[0]
+        image = imutils.resize(image, width=width_)
+        mask = imutils.resize(mask, width=width_)
+    
     
     #rotation: with proba rot_angle_proba ensuring no part of the image is cut off, and ranodm angle between 10 and 350
     li_rot_angle = list(np.repeat(0,100*(1-p_rot_angle)))
     li_rot_angle.extend([random.randrange(10,350,1) for i in range(100-len(li_rot_angle))])
     r = random.sample(li_rot_angle, 1)[0]
-    img = imutils.rotate_bound(img, r)
+    img = imutils.rotate_bound(image, r)
     mask = imutils.rotate_bound(mask, r)
     
     aug = iaa.Sequential([
@@ -494,6 +503,9 @@ def image_aug_keepingallinfo(image, mask, li_resize_width, p_rot_angle=0, p_Flip
         #flip horizontaly and vertically to make as if the fish was swimimg from both direction and from upside down
         iaa.Fliplr(p_Fliplr), iaa.Flipud(p_Flipud),
 
+        #contrast
+        iaa.Sometimes(p_contrast,iaa.GammaContrast((v_min_contrast, v_max_contrast))), 
+        
         #weather: clouds, fog, snowflakes & noise #iaa.Fog(),iaa.Snowflakes(density=(0.005, 0.025),flake_size=(0.2, 1.0))
         iaa.Sometimes(p_cloud,iaa.Clouds()),
         
@@ -526,7 +538,7 @@ def image_aug_keepingallinfo(image, mask, li_resize_width, p_rot_angle=0, p_Flip
     return(img.astype(np.uint8))
 
 
-def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where_points=(), nbr=1):
+def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=(), nbr=1):
     
     '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
     specify where to pu thte mask, then it will choose randomly so that the entire mask is still visible. One can also
@@ -546,10 +558,10 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
     #if heatmap specified (one can construct heatmap based on available mask disposition for each species 
     #e.g. usefull for blennie fluviatile)
     elif len(heatmap)!=0:
-        l = heatmap_img_2points(heatmap, img, precision, li_resize_width)
+        l = heatmap_img_2points(heatmap, img, precision)
         li_black_img = []
         for x,y in l:
-            li_black_img.extend(maskimg_bigger(img, h, w, li_resize_width, precision=precision, where_points=(x,y), nbr=1))
+            li_black_img.extend(maskimg_bigger(img, h, w, precision=precision, where_points=(x,y), nbr=1))
         return(li_black_img)
         
     #otherwise the heatmap was not specified and the points were, in which case we will use them
@@ -565,18 +577,57 @@ def maskimg_bigger(img, h, w, li_resize_width, precision=1000, heatmap=[], where
     return([black_img])
 
 
-def heatmap_maskoccurences(background, c=60):
+#def heatmap_maskoccurences(background, c=60):
+#    background_gray = cv2.cvtColor(background,cv2.COLOR_BGR2GRAY)
+#    background_gray[0:c,:] = 0
+#    background_gray[-c:,:] = 0
+#    background_gray = skimage.color.gray2rgb(background_gray)
+#    return(background_gray)
+
+def enough_white(background_g, background_gray, it_white, it_black):
+    #TODO: optimise!
+    nbr_non_zero_value_pixel = np.sum(background_g != 0)
+    if nbr_non_zero_value_pixel < 5000:
+        print('note enough white pixel:', nbr_non_zero_value_pixel)
+        it_white = int(it_white*0.7)
+        background_g = cv2.erode(background_gray, None, iterations=it_white)
+        background_g = cv2.dilate(background_g, None, iterations=it_black)
+        nbr_non_zero_value_pixel = np.sum(background_g != 0)
+        return(enough_white(background_g, background_gray, it_white, it_black))
+    else:
+        return(background_g)
+        
+def heatmap_maskoccurences(background, c=60, it_white=40, it_black=5, specific_place=0):
     '''From a background image, it will produce a heatmap showing with higher value (but not normalized) where there
     is more probability where there seems to have no contour (if c param is high)
     FL Rules:probability higher when the pixel is brighter & probability=0 for the top 35 rows and las 35 rows'''
+    
     background_gray = cv2.cvtColor(background,cv2.COLOR_BGR2GRAY)
     background_gray[0:c,:] = 0
     background_gray[-c:,:] = 0
-    background_gray = skimage.color.gray2rgb(background_gray)
-    return(background_gray)
+    
+    if specific_place==1:
+        #normalize from 0 to 255 to get black and white pixel
+        background_gray = cv2.normalize(background_gray,  background_gray, 0, 255, cv2.NORM_MINMAX)
+        background_gray = cv2.GaussianBlur(background_gray, (11, 11), 0)
+        background_gray = cv2.threshold(background_gray, 200, 255, cv2.THRESH_BINARY)[1]
+
+        ### then detect white spot
+        #reduce the area of white pixel
+        background_g = cv2.erode(background_gray, None, iterations=it_white)
+        #remove small area of balck value inside white area
+        background_g = cv2.dilate(background_g, None, iterations=it_black)
+        #verify if enough non-zero values black pixel
+        background_g = enough_white(background_g, background_gray, it_white, it_black)
+    else:
+        background_g = background_gray.copy()
+    
+    background_g = skimage.color.gray2rgb(background_g)
+    return(background_g)
 
 
-def heatmap_img_2points(heatmap, img, precision, li_resize_width, nbr=1):
+
+def heatmap_img_2points(heatmap, img, precision, nbr=1):
     
     '''From a probability heatmap and an image of smaller size, it will output a set of points (x,y) depending on the proba of
     the heatmap'''
@@ -589,7 +640,7 @@ def heatmap_img_2points(heatmap, img, precision, li_resize_width, nbr=1):
     #put the image on the specific selected x,y points and compute its score when multiplied with the heatmap
     li_s = []
     for x, y in t:
-        new_img = maskimg_bigger(img=img, h=h, w=w, li_resize_width=li_resize_width, precision=precision, 
+        new_img = maskimg_bigger(img=img, h=h, w=w, precision=precision, 
                                  where_points=(x,y), nbr=1)[0]
         #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
@@ -679,12 +730,15 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
     return(result)
  
     
-def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width,
-                       thickness=2, p_Fliplr=0.4, p_Flipud=0.25,
-                       p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, p_blur=0, 
-                       li_sigma_blur=[0.2], heatmap=[]):
-    '''joing two images together a background and a foreground with its mask
-    li_masks_foreground: list of tuples: [(li_x,li_y), ]'''
+def new_image_creation(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[],
+                       thickness=2, p_Fliplr=0.4, p_Flipud=0.25, p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, 
+                       p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1):
+    '''joining two images together a background and a foreground with one mask
+    li_masks_foreground: list of tuples: [(li_x,li_y)]'''
+    
+    ##################################### augment initial image  ######################################    
+    #that will be influcence with mask surrouned black pixel otherwise
+    foreground = image_aug(foreground, p_histonorm)
     
     ############################# create bbox image with only mask - FCT1 #############################
     images_mask, masks = reduceimagemask(image=foreground, masks=li_masks_foreground)
@@ -699,18 +753,16 @@ def new_image_creation(background, foreground, li_masks_foreground, heatmap_prec
     ###################################### augment masks - FCT2 #######################################    
     #augment image
     image_mask_aug = image_aug_keepingallinfo(image=image_mask, mask=mask, li_resize_width=li_resize_width, p_rot_angle=0.2,
-                                                    p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min, v_dark_max=v_dark_max, 
-                                                    p_blur=p_blur, li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, 
-                                              p_Flipud=p_Flipud)   
+                                             p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min, v_dark_max=v_dark_max, 
+                                             p_blur=p_blur, li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, p_Flipud=p_Flipud,
+                                             p_contrast=p_contrast, v_min_contrast=v_min_contrast, v_max_contrast=v_max_contrast)   
     #plt.imshow(image_mask_aug)
     #plt.show()    
     
     ######################### choose a place for the mask to be added - FCT3 ##########################    
-    #choose some places for this specific mask size and augment in a different way for each place 
-    #(except rotation and size as this might change the place possibility)
+    #choose some places for this specific mask size
     h,w,_ = background.shape
-    li_image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, li_resize_width=li_resize_width, 
-                                             heatmap=heatmap, precision=heatmap_precision)
+    li_image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, heatmap=heatmap, precision=heatmap_precision)
  
     #################################### join both images - FCT4 ###################################    
     li_img_final = []
@@ -722,6 +774,29 @@ def new_image_creation(background, foreground, li_masks_foreground, heatmap_prec
 
 
 
+def MultipleMaskAugmentation_small_rotation(foreground, background, li_masks, thickness=2, delta=0):
+    '''from one foreground with multiple mask and a background, it will put the foreground mask with random rotation to each
+    mask on the background'''
+    for m in li_masks:
+        
+        ############################# create bbox image with only mask - FCT1 #############################
+        images_mask, masks = reduceimagemask(image=foreground, masks=[m])
+
+        ###################################### augment masks - FCT2 #######################################    
+        #augment image
+        image_mask_aug = image_aug_keepingallinfo(image=images_mask[0], mask=masks[0], p_rot_angle=1,
+                                                 v_dark_min=0.7, v_dark_max=1.3, p_Fliplr=0.3, p_Flipud=0.2,
+                                                 p_contrast=0.3, v_min_contrast=0.6, v_max_contrast=1.4)      
+
+        ######################### choose a place for the mask to be added - FCT3 ##########################    
+        h,w,_ = background.shape
+        image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, where_points=(min(m[0]),min(m[1])), nbr=1)[0]
+
+        #################################### join both images - FCT4 ###################################    
+        background = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
+
+    return(background)
+    
 
 #concatenate images one next to the other (i.e. to make nicer plot)
 def concat_images(img1, img2, g=15):
