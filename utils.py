@@ -538,7 +538,7 @@ def image_aug_keepingallinfo(image, mask, li_resize_width=[], p_rot_angle=0, p_F
     return(img.astype(np.uint8))
 
 
-def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=(), nbr=1):
+def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=(), how='c', nbr=1):
     
     '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
     specify where to pu thte mask, then it will choose randomly so that the entire mask is still visible. One can also
@@ -552,13 +552,13 @@ def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=(), nbr=1
            
     #if no points and no heatmap specified, we will put the mask randomly without loosing any initial image part
     if (len(heatmap)!=0) & (len(where_points)!=0):
-        x = random.sample(range(w-img.shape[1]-5), 1)[0]
-        y = random.sample(range(h-img.shape[0]-5), 1)[0]
+        x = random.sample(range(w-img.shape[1]-40), 1)[0]
+        y = random.sample(range(h-img.shape[0]-40), 1)[0]
         
     #if heatmap specified (one can construct heatmap based on available mask disposition for each species 
     #e.g. usefull for blennie fluviatile)
     elif len(heatmap)!=0:
-        l = heatmap_img_2points(heatmap, img, precision)
+        l = heatmap_img_2points(heatmap, img, precision, how=how)
         li_black_img = []
         for x,y in l:
             li_black_img.extend(maskimg_bigger(img, h, w, precision=precision, where_points=(x,y), nbr=1))
@@ -577,13 +577,6 @@ def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=(), nbr=1
     return([black_img])
 
 
-#def heatmap_maskoccurences(background, c=60):
-#    background_gray = cv2.cvtColor(background,cv2.COLOR_BGR2GRAY)
-#    background_gray[0:c,:] = 0
-#    background_gray[-c:,:] = 0
-#    background_gray = skimage.color.gray2rgb(background_gray)
-#    return(background_gray)
-
 def enough_white(background_g, background_gray, it_white, it_black):
     #TODO: optimise!
     nbr_non_zero_value_pixel = np.sum(background_g != 0)
@@ -597,14 +590,26 @@ def enough_white(background_g, background_gray, it_white, it_black):
     else:
         return(background_g)
         
-def heatmap_maskoccurences(background, c=60, it_white=40, it_black=5, specific_place=0):
+def heatmap_maskoccurences(background, c=70, it_white=40, it_black=5, n_clusters=5, specific_place=0):
     '''From a background image, it will produce a heatmap showing with higher value (but not normalized) where there
     is more probability where there seems to have no contour (if c param is high)
-    FL Rules:probability higher when the pixel is brighter & probability=0 for the top 35 rows and las 35 rows'''
+    FL Rules:probability higher when the pixel is brighter & probability=0 for the top 35 rows and las 35 rows
+    specific_place: good if only few fishes to add (si non all in middle'''
     
     background_gray = cv2.cvtColor(background,cv2.COLOR_BGR2GRAY)
     background_gray[0:c,:] = 0
     background_gray[-c:,:] = 0
+    #plt.imshow(background_gray, cmap='gray')
+    #plt.show()
+    
+    #reduce nbr of color in image (specially for algues on the vitre)
+    arr = background_gray.reshape((-1,2))
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(arr)
+    labels = kmeans.labels_
+    centers = kmeans.cluster_centers_
+    background_gray = centers[labels].reshape(background_gray.shape).astype('uint8')
+    plt.imshow(background_gray, cmap='gray')
+    plt.show()
     
     if specific_place==1:
         #normalize from 0 to 255 to get black and white pixel
@@ -623,25 +628,36 @@ def heatmap_maskoccurences(background, c=60, it_white=40, it_black=5, specific_p
         background_g = background_gray.copy()
     
     background_g = skimage.color.gray2rgb(background_g)
+    plt.imshow(background_g, cmap='gray')
+    plt.show()
+    
     return(background_g)
 
 
 
-def heatmap_img_2points(heatmap, img, precision, nbr=1):
+def heatmap_img_2points(heatmap, img, precision, nbr=1, how='p'):
     
     '''From a probability heatmap and an image of smaller size, it will output a set of points (x,y) depending on the proba of
-    the heatmap'''
+    the heatmap
+    *how: 'p' fro proba or 'c' for certainty'''
+    
+    if how not in ['c', 'p']:
+        raise Warning('how parameter must be either c or p')
     
     #select randomly x (precision) number of points in the image
     h, w = heatmap.shape[0:2]
-    #TODO: change so that not possible to have twice the same tuple
-    t = list(zip(random.choices(range(w-img.shape[1]-5), k=precision), random.choices(range(h-img.shape[0]-5), k=precision)))
+    
+    #reduce size of heatmap to match img copy paste (i.e. put 0 where we could not have an img)
+    heatmap_ = heatmap[0:h-img.shape[0]-5, 0:w-img.shape[1]-5, :].copy()
+    indices = np.where(heatmap_!=0)
+    coordinates = list(zip(indices[1], indices[0]))
+    t = random.choices(range(len(coordinates)), k=precision)
+    t = [coordinates[i] for i in t]
     
     #put the image on the specific selected x,y points and compute its score when multiplied with the heatmap
     li_s = []
     for x, y in t:
-        new_img = maskimg_bigger(img=img, h=h, w=w, precision=precision, 
-                                 where_points=(x,y), nbr=1)[0]
+        new_img = maskimg_bigger(img=img, h=h, w=w, precision=precision, where_points=(x,y), nbr=1)[0]
         #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
         li_s.append(sum(sum(sum(cv2.multiply(new_img, heatmap)))))
@@ -649,8 +665,12 @@ def heatmap_img_2points(heatmap, img, precision, nbr=1):
     #normalize the score so that they sumed to 1 --> proba
     li_p = [x/sum(li_s) for x in li_s]
     
-    #choose according to the probability nbr points
-    li_choose_index = np.random.choice(range(precision), nbr, p=li_p)
+    #choose point according to the choosen method ('c', 'p')
+    if how=='c':
+        li_choose_index = sorted(range(len(li_p)), key=lambda i:li_p[i])[-nbr:] 
+    if how=='p':
+        #choose according to the probability nbr points
+        li_choose_index = np.random.choice(range(precision), nbr, p=li_p)
     li_points = [t[i] for i in li_choose_index]
     
     return(li_points)
