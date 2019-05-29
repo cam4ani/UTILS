@@ -419,12 +419,11 @@ def from_chapter_to_structured_data(text, li_title):
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
-def image_aug(image,p_histonorm=0,remove_reflects=False):
+def image_aug(image,p_histonorm=0):
     #standard histogram equalization
     aug = iaa.Sometimes(p_histonorm,iaa.HistogramEqualization())
     image = aug.augment_image(image)
-    if remove_reflects:
-        image = data_augmentation_remove_reflect(image)
+    
     return(image)
 
 
@@ -549,7 +548,7 @@ def image_aug_keepingallinfo(image, mask, li_resize_width=[], p_rot_angle=0, p_F
     return(img.astype(np.uint8), mask.astype(np.uint8))
 
 
-def maskimg_bigger(img, mask, h, w, precision=1000, heatmap=[], where_points=(), how='c', nbr=1):
+def maskimg_bigger(img, h, w, precision=1000, heatmap=[], where_points=(), how='c', nbr=1):
     
     '''Function that adds black pixel to from a mask-image of the size we want, with the mask where we want. If we dont
     specify where to put the mask, then it will choose randomly so that the entire mask is still visible. One can also
@@ -561,7 +560,7 @@ def maskimg_bigger(img, mask, h, w, precision=1000, heatmap=[], where_points=(),
     if (len(heatmap)==0) & (len(where_points)==0):
         warnings.warn("You specified both heatmap and points, we will use the heatmap")
            
-    #if no points and no heatmap specified, we will put the mask randomly without loosing any part of the initial image
+    #if no points and no heatmap specified, we will put the mask randomly without loosing any initial image part
     if (len(heatmap)!=0) & (len(where_points)!=0):
         x = random.sample(range(w-img.shape[1]-40), 1)[0]
         y = random.sample(range(h-img.shape[0]-40), 1)[0]
@@ -569,10 +568,10 @@ def maskimg_bigger(img, mask, h, w, precision=1000, heatmap=[], where_points=(),
     #if heatmap specified (one can construct heatmap based on available mask disposition for each species 
     #e.g. usefull for blennie fluviatile)
     elif len(heatmap)!=0:
-        l = heatmap_img_2points(heatmap, img, mask, precision, how=how)
+        l = heatmap_img_2points(heatmap, img, precision, how=how)
         li_black_img = []
         for x,y in l:
-            li_black_img.extend(maskimg_bigger(img, mask, h, w, precision=precision, where_points=(x,y), nbr=1))
+            li_black_img.extend(maskimg_bigger(img, h, w, precision=precision, where_points=(x,y), nbr=1))
         return(li_black_img)
         
     #otherwise the heatmap was not specified and the points were, in which case we will use them
@@ -581,13 +580,11 @@ def maskimg_bigger(img, mask, h, w, precision=1000, heatmap=[], where_points=(),
         
     #black image of size w,h
     black_img = np.zeros((h,w,3), np.uint8)
-    black_mask = np.zeros((h,w,3), np.uint8)
 
     #match the x1,y1 points of the mask to the x,y points in the black image
     black_img[y:y+img.shape[0], x:x+img.shape[1]] = img
-    black_mask[y:y+mask.shape[0], x:x+mask.shape[1]] = mask
     
-    return([(black_img, black_mask)])
+    return([black_img])
 
 
 def enough_white(background_g, background_gray, it_white, it_black):
@@ -647,7 +644,7 @@ def heatmap_maskoccurences(background, c=70, it_white=40, it_black=5, n_clusters
 
 
 
-def heatmap_img_2points(heatmap, img, mask, precision, nbr=1, how='p'):
+def heatmap_img_2points(heatmap, img, precision, nbr=1, how='p'):
     
     '''From a probability heatmap and an image of smaller size, it will output a set of points (x,y) depending on the proba of
     the heatmap
@@ -675,7 +672,7 @@ def heatmap_img_2points(heatmap, img, mask, precision, nbr=1, how='p'):
     li_s = []
     for x, y in t:
         #remove hal size of images so that the initial where point (x,y) are in the middle of the image
-        new_img, new_mask = maskimg_bigger(img=img, mask=mask, h=h, w=w, precision=precision, where_points=(x,y), nbr=1)[0]
+        new_img = maskimg_bigger(img=img, h=h, w=w, precision=precision, where_points=(x,y), nbr=1)[0]
         #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
         li_s.append(sum(sum(sum(cv2.multiply(new_img, heatmap)))))
@@ -770,8 +767,7 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
 ############## NEW IMAGE CREATION
 def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[],
                        thickness=2, p_Fliplr=0.4, p_Flipud=0.25, p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, 
-                       p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1,
-                       remove_reflects=False):
+                       p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1):
     '''joining two images together a background and a foreground with one mask li_masks_foreground: list of tuples: [(li_x,li_y)]'''
     
     #plt.imshow(foreground)
@@ -779,7 +775,7 @@ def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heat
     
     ##################################### augment initial image  ######################################    
     #that will be influcence with mask surrouned black pixel otherwise
-    foreground = image_aug(foreground, p_histonorm, remove_reflects)
+    foreground = image_aug(foreground, p_histonorm)
     #plt.imshow(foreground)
     #plt.show()
     
@@ -799,22 +795,21 @@ def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heat
                                              p_cloud=p_cloud, p_bw=p_bw, v_dark_min=v_dark_min, v_dark_max=v_dark_max, 
                                              p_blur=p_blur, li_sigma_blur=li_sigma_blur, p_Fliplr=p_Fliplr, p_Flipud=p_Flipud,
                                              p_contrast=p_contrast, v_min_contrast=v_min_contrast, v_max_contrast=v_max_contrast)   
-    #plt.imshow(image_mask_aug)
-    #plt.show()    
-    #plt.imshow(mask.astype(float), cmap='gray')
-    #plt.show()    
+    plt.imshow(image_mask_aug)
+    plt.show()    
+    plt.imshow(mask.astype(float), cmap='gray')
+    plt.show()    
     
     ######################### choose a place for the mask to be added - FCT3 ##########################    
     #choose some places for this specific mask size
     h,w,_ = background.shape
-    li_image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, mask=mask, h=h, w=w, heatmap=heatmap, precision=heatmap_precision)
+    li_image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, heatmap=heatmap, precision=heatmap_precision)
     
     #################################### join both images - FCT4 ###################################    
     
     li_img_final = []
-    for image_aug_sized, mask_aug_sized in li_image_mask_aug_sized:  
-        img_final = foreground_background_into1(background=background, foreground=image_aug_sized, mask=mask_aug_sized,
-                                                thickness=thickness)
+    for image_mask_aug_sized in li_image_mask_aug_sized:  
+        img_final = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
         li_img_final.append(img_final)
 
     return(li_img_final)
