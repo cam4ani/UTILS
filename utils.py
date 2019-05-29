@@ -419,12 +419,10 @@ def from_chapter_to_structured_data(text, li_title):
 ################################### preprocessing fct for image ###################################
 ###################################################################################################
 
-def image_aug(image,p_histonorm=0,remove_reflects=False):
+def image_aug(image,p_histonorm=0):
     #standard histogram equalization
     aug = iaa.Sometimes(p_histonorm,iaa.HistogramEqualization())
     image = aug.augment_image(image)
-    if remove_reflects:
-        image = data_augmentation_remove_reflect(image)
     return(image)
 
 
@@ -770,8 +768,7 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
 ############## NEW IMAGE CREATION
 def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[],
                        thickness=2, p_Fliplr=0.4, p_Flipud=0.25, p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, 
-                       p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1,
-                       remove_reflects=False):
+                       p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1):
     '''joining two images together a background and a foreground with one mask li_masks_foreground: list of tuples: [(li_x,li_y)]'''
     
     #plt.imshow(foreground)
@@ -779,7 +776,7 @@ def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heat
     
     ##################################### augment initial image  ######################################    
     #that will be influcence with mask surrouned black pixel otherwise
-    foreground = image_aug(foreground, p_histonorm, remove_reflects)
+    foreground = image_aug(foreground, p_histonorm)
     #plt.imshow(foreground)
     #plt.show()
     
@@ -1180,7 +1177,8 @@ def BinaryMaskPostProcessing(r, p=90):
     
 #take an image and return the image without reflect
 def data_augmentation_remove_reflect(img):
-    '''r: Radius of a circular neighborhood of each point inpainted that is considered by the algorithm.'''
+    '''WOrks only on specific image type (col de luterus) i..e where brightest part is the reflects
+    r: Radius of a circular neighborhood of each point inpainted that is considered by the algorithm.'''
     #convert it to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     #should be more robust gray = cv2.GaussianBlur(gray, (41, 41), 0) #flou une image en utilisant un filtre gaussian
