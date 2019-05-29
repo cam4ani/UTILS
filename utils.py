@@ -608,8 +608,8 @@ def heatmap_maskoccurences(background, c=70, it_white=40, it_black=5, n_clusters
     labels = kmeans.labels_
     centers = kmeans.cluster_centers_
     background_gray = centers[labels].reshape(background_gray.shape).astype('uint8')
-    plt.imshow(background_gray, cmap='gray')
-    plt.show()
+    #plt.imshow(background_gray, cmap='gray')
+    #plt.show()
     
     if specific_place==1:
         #normalize from 0 to 255 to get black and white pixel
@@ -617,7 +617,6 @@ def heatmap_maskoccurences(background, c=70, it_white=40, it_black=5, n_clusters
         background_gray = cv2.GaussianBlur(background_gray, (11, 11), 0)
         background_gray = cv2.threshold(background_gray, 200, 255, cv2.THRESH_BINARY)[1]
 
-        ### then detect white spot
         #reduce the area of white pixel
         background_g = cv2.erode(background_gray, None, iterations=it_white)
         #remove small area of black value inside white area
@@ -628,8 +627,8 @@ def heatmap_maskoccurences(background, c=70, it_white=40, it_black=5, n_clusters
         background_g = background_gray.copy()
     
     background_g = skimage.color.gray2rgb(background_g)
-    plt.imshow(background_g, cmap='gray')
-    plt.show()
+    #plt.imshow(background_g, cmap='gray')
+    #plt.show()
     
     return(background_g)
 
@@ -648,15 +647,21 @@ def heatmap_img_2points(heatmap, img, precision, nbr=1, how='p'):
     h, w = heatmap.shape[0:2]
     
     #reduce size of heatmap to match img copy paste (i.e. put 0 where we could not have an img)
-    heatmap_ = heatmap[0:h-img.shape[0]-5, 0:w-img.shape[1]-5, :].copy()
+    h2 = int(img.shape[0]/2)
+    w2 = int(img.shape[1]/2)
+    #if the points are 0 and hence half of the image can not be on the right/left: will be taken into account with max()
+    heatmap_ = heatmap[0:h-h2-5, 0:w-w2-5, :].copy()
     indices = np.where(heatmap_!=0)
     coordinates = list(zip(indices[1], indices[0]))
     t = random.choices(range(len(coordinates)), k=precision)
     t = [coordinates[i] for i in t]
+    #remove half size of images so that the coordinates represent the middle of the image instead of x1,y1 
+    t = [(max(x-w2,0),max(y-h2,0)) for (x,y) in t]
     
     #put the image on the specific selected x,y points and compute its score when multiplied with the heatmap
     li_s = []
     for x, y in t:
+        #remove hal size of images so that the initial where point (x,y) are in the middle of the image
         new_img = maskimg_bigger(img=img, h=h, w=w, precision=precision, where_points=(x,y), nbr=1)[0]
         #replace any non-black (non 0) values to 255 (white) as that should not influence the score
         _,thresh1 = cv2.threshold(new_img,1,255,cv2.THRESH_BINARY)
@@ -819,6 +824,37 @@ def NewImage_MultipleMaskAugmentationRotation(foreground, background, li_masks, 
     return(background)
 
 
+def NewImage_MultipleMaskFG(lit_foreground_masks, background, n_clusters, thickness=3, it_white=30, it_black=5,
+                            heatmap_precision=1000, specific_place=1):
+    '''from one foreground with multiple mask and a background, it will put the foreground mask with random rotation to each
+    mask on the background'''
+    for foreground, li_masks in lit_foreground_masks:
+        for m in li_masks:
+
+            ############################# create bbox image with only mask - FCT1 #############################
+            images_mask, masks = reduceimagemask(foreground, [m])
+
+            ###################################### augment masks - FCT2 #######################################    
+            #augment image
+            image_mask_aug = image_aug_keepingallinfo(image=images_mask[0], mask=masks[0], p_rot_angle=0.2,
+                                                     v_dark_min=0.7, v_dark_max=1.3, p_Fliplr=0.3, p_Flipud=0.2,
+                                                     p_contrast=0.3, v_min_contrast=0.6, v_max_contrast=1.4)      
+
+            ######################### choose a place for the mask to be added - FCT3 ##########################    
+            h,w,_ = background.shape
+            #plt.imshow(background)
+            #plt.show() 
+            HM = heatmap_maskoccurences(background, c=70, it_white=it_white, n_clusters=n_clusters, 
+                                        it_black=it_black, specific_place=specific_place)
+            #plt.imshow(HM)
+            #plt.show()            
+            image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, heatmap=HM, nbr=1, 
+                                                  precision=heatmap_precision)[0]
+
+            #################################### join both images - FCT4 ###################################    
+            background = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
+            
+    return(background)
 ##############
 
 
