@@ -425,7 +425,6 @@ def image_aug(image,p_histonorm=0):
     image = aug.augment_image(image)
     return(image)
 
-
 def polygons2binarymask(lix,liy, image):
     '''create a binary black and white three channel mask'''
     mask = np.zeros([image.shape[0], image.shape[1]], dtype=np.uint8)
@@ -766,7 +765,7 @@ def foreground_background_into1(background, foreground, with_smooth=True, thickn
     return(result)
  
 ############## NEW IMAGE CREATION
-def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[],
+def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heatmap_precision, li_resize_width=[], dist=1.2,
                        thickness=2, p_Fliplr=0.4, p_Flipud=0.25, p_rot_angle=0.2, p_cloud=0, p_bw=0, v_dark_min=1, v_dark_max=1, 
                        p_blur=0, li_sigma_blur=[0.2], heatmap=[], p_histonorm=0, p_contrast=0, v_min_contrast=1, v_max_contrast=1):
     '''joining two images together a background and a foreground with one mask li_masks_foreground: list of tuples: [(li_x,li_y)]'''
@@ -786,7 +785,7 @@ def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heat
         image_mask = images_mask[0]
         mask = masks[0]
     else:
-        raise Warning('There is several masks, choose one') #TODO: improve to make it more general
+        raise Warning('There is several masks, choose one')
     #plt.imshow(image_mask)
     #plt.show()
 
@@ -809,12 +808,23 @@ def NewImage_oneforegroundmask(background, foreground, li_masks_foreground, heat
     #################################### join both images - FCT4 ###################################    
     
     li_img_final = []
+    li_mask_final = []
     for image_aug_sized, mask_aug_sized in li_image_mask_aug_sized:  
         img_final = foreground_background_into1(background=background, foreground=image_aug_sized, mask=mask_aug_sized,
                                                 thickness=thickness)
         li_img_final.append(img_final)
+        #we have only one mask
+        li_xs, li_ys = convert_binary_mask_to_VGG_polygons(mask_aug_sized)
+        li_x = [int(n) for n in li_xs[0]]
+        li_y = [int(n) for n in li_ys[0]]
+        #smooth polygons mask with distance
+        li_t = [(li_x[j],li_y[j]) for j in range(len(li_x))]
+        li_t = ramerdouglas(li_t, dist)
+        li_x = [xi for xi,yi in li_t]
+        li_y = [yi for xi,yi in li_t]
+        li_mask_final.append((li_x, li_y))
 
-    return(li_img_final)
+    return(li_img_final, li_mask_final)
 
 
 def NewImage_MultipleMaskAugmentationRotation(foreground, background, li_masks, thickness=2, heatmap_precision=1000):
@@ -833,11 +843,12 @@ def NewImage_MultipleMaskAugmentationRotation(foreground, background, li_masks, 
 
         ######################### choose a place for the mask to be added - FCT3 ##########################    
         h,w,_ = background.shape
-        image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, where_points=(min(m[0]),min(m[1])), nbr=1,
+        image_mask_aug_sized,mask = maskimg_bigger(img=image_mask_aug, mask=mask, h=h, w=w, where_points=(min(m[0]),min(m[1])), nbr=1,
                                              precision=heatmap_precision)[0]
 
         #################################### join both images - FCT4 ###################################    
-        background = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
+        background = foreground_background_into1(background=background, foreground=image_mask_aug_sized, mask=mask,
+                                                 thickness=thickness)
 
     return(background)
 
@@ -866,16 +877,14 @@ def NewImage_MultipleMaskFG(lit_foreground_masks, background, n_clusters, thickn
                                         it_black=it_black, specific_place=specific_place)
             #plt.imshow(HM)
             #plt.show()            
-            image_mask_aug_sized = maskimg_bigger(img=image_mask_aug, h=h, w=w, heatmap=HM, nbr=1, 
+            image_mask_aug_sized, mask = maskimg_bigger(img=image_mask_aug, mask=mask, h=h, w=w, heatmap=HM, nbr=1, 
                                                   precision=heatmap_precision)[0]
 
             #################################### join both images - FCT4 ###################################    
-            background = foreground_background_into1(background, image_mask_aug_sized, thickness=thickness)
+            background = foreground_background_into1(background, image_mask_aug_sized, mask=mask, thickness=thickness)
             
     return(background)
 ##############
-
-
 
 
 #concatenate images one next to the other (i.e. to make nicer plot)
