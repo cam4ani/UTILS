@@ -4,12 +4,18 @@ usefull info on maskrcnn
 #to optimize GPU memory: https://github.com/matterport/Mask_RCNN/wiki
 #https://engineering.matterport.com/splash-of-color-instance-segmentation-with-mask-r-cnn-and-tensorflow-7c761e238b46
 
+
 ### info on how its working
 *The network generates the bounding boxes first, and then filters them to pick the most accurate ones, and then finally applies the mask branch only on the detected boxes. This arrangement actually makes the network faster because it allows it to run the mask branch (which is a heavy branch) only on the boxes that have already been filtered.
 *the classification comes before generating the pixel by pixel. 
 *object-detection and mask are parallel run
 *Masks are generated at the pixel level. In other words, each pixels decides for itself if it's part of the mask or not. So the mask can take any shape, if you have binary masks (then simply use them directly Skiping the binary->polygon->binary conversion which treats the masks of holes as the object mask during training). If you want to have hole in your masks and dontahve bianry mask, then you can create one mask with a bridge between holes for example. https://github.com/matterport/Mask_RCNN/issues/933
 *A test you can do to rule out any technical issues is to test on the training data. If masks look good on the training data but bad on the validation data, then this confirms that you need a bigger dataset.
+*Further, the RPN doesn’t scan over the image directly. Instead, the RPN scans over the backbone feature map. 
+*If several anchors overlap too much, we keep the one with the highest foreground score and discard the rest (referred to as Non-max Suppression). After that we have the final proposals (regions of interest) that we pass to the next stage.
+*ROI pooling refers to cropping a part of a feature map and resizing it to a fixed size. It’s similar in principle to cropping part of an image and then resizing it (but there are differences in implementation details).
+*Faster RCNN: same as maskrcc without segmentation
+*Mask_RCNN networks implementation is not meant for BG alone too. Because they have internally ROI(Region of Interest) layer.
 
 ### maskrcnn output 
 results = model.detect([image1,image2], verbose=0)
@@ -43,6 +49,10 @@ fucntion that 'gives the images': in model.py of mask-rcnn code check the load_i
 
 
 ## training
+1. as expected: must train again if change the numebr of class: https://github.com/matterport/Mask_RCNN/issues/1513
+2. ROI mini batch set to 512 is to high when you have small amount of obect in the picture, as it wont lead to 1:3 positive to negative ratio (ratio suggested by the paper). Hence reduce to 128 for example when you want not to overfit the negative ROIs https://github.com/matterport/Mask_RCNN/issues/43
+
+3.:
 def train(model):
     
     path_ = path_image
