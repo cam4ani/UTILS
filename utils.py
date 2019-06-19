@@ -1253,6 +1253,7 @@ def data_augmentation_remove_reflect(img):
     result = cv2.inpaint(img,mask_,5,cv2.INPAINT_TELEA)
     return(result)
 
+
 #from an image and mask, keep only the part of the image that intersect with the mask
 def KeepMaskOnly(image, mask, debug_text):
     try:
