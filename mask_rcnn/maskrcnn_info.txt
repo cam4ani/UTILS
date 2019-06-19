@@ -16,6 +16,7 @@ usefull info on maskrcnn
 *ROI pooling refers to cropping a part of a feature map and resizing it to a fixed size. It’s similar in principle to cropping part of an image and then resizing it (but there are differences in implementation details).
 *Faster RCNN: same as maskrcc without segmentation
 *Mask_RCNN networks implementation is not meant for BG alone too. Because they have internally ROI(Region of Interest) layer.
+*overlapping bounding boxes/masks can be located on the same object with different class. These overlapping masks are not filtered by NMS because they're from different classes, the network is predicting the same object, with almost exactly the same mask, but assigning different labels to those predictions. (https://github.com/matterport/Mask_RCNN/issues/809)
 
 ### maskrcnn output 
 results = model.detect([image1,image2], verbose=0)
@@ -98,4 +99,29 @@ def train(model):
 
 
 
+###basics to copy paste
+####load model with correct batchsize ####
+#Override the training configurations with a few changes for inferencing.
+class InferenceConfig(config.__class__):
+    # Run detection on one image at a time
+    GPU_COUNT = 1
+    IMAGES_PER_GPU = batch_size
+    #BATCH_SIZE = GPU_COUNT * IMAGES_PER_GPU
 
+config = InferenceConfig()
+#Create model in inference mode
+model = modellib.MaskRCNN(mode='inference', model_dir=MODEL_DIR, config=config)
+#load weights
+weights_path = os.path.join(ROOT_DIR, 'logs', id_, ep+'.h5') 
+model.load_weights(weights_path, by_name=True)
+
+####take correct number of images acccorading to batch_size ####
+files = glob.glob(os.path.join(VGG_DIR, 'test', '*.png'))
+d = len(files)%batch_size
+files = files[0:(len(files)-d)]
+
+####first prediciton takes longeur, so we wont use it in fps count ####
+#keras needs to allocate memory and do other stuff before the first inference
+#https://github.com/keras-team/keras/issues/8724
+#https://groups.google.com/a/tensorflow.org/forum/#!topic/discuss/PDIBnp1ftxk
+results = model.detect([cv2.imread(f) for f in files[0:batch_size]], verbose=0)    

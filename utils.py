@@ -26,6 +26,7 @@ import operator
 import math
 import re
 import warnings
+from itertools import combinations
 
 #to match substring in string
 import fuzzysearch
@@ -1132,11 +1133,14 @@ def remove_embedded_bbox_keepindexonly(li_bbox, plot_bbox=0):
     return([i for i in range(len(li_bbox)) if i not in li_index_r])
 
 
+################################################### post process maskrcnn ###################################################
+
+##### 1
 #binary masks: if one is included at least 90% in another one, then remove the less probable between both
 def BinaryMaskPostProcessing(r, p=90):
     '''it will postprocess mask-rcnn output and output a more precise one of exact same format, removing the ones that\
     are/have at least 90% included in/from another one (in which case we removed the less certain object even if its not \
-    the one being in another one for our observation its better like this)'''
+    the one being in another one from our observation its better like this)'''
     
     #sort so that under a certain condition verified with any object i+1, object i will be removed, and we will pass through
     #each combination
@@ -1168,21 +1172,79 @@ def BinaryMaskPostProcessing(r, p=90):
     #return the results without the info of the index to remove
     if len(li_index_2remove)==0:
         return(r)
-    else:
-        rr = {}
-        for k,v in r.items():
-            if k=='masks':
-                #TODO: faster! nearly 5 second when we need to remvoe a mask!!
-                #small example on how to remove a mask (i.e. entries in third dimension based on a list of index)
-                #l = np.array([[[1,9,45],[22,7,54],[3,5,43]],[[2,33,3],[6,333,34],[3,45,5]],[[0,6,66],[2,65,87],[4,68,123]]])
-                #np.array([[np.delete(np.array(j), [1,0], 0) for j in x] for x in l])
-                rr[k] = np.array([[np.delete(j, li_index_2remove, 0) for j in x] for x in v])
-                continue
-            else:
-                rr[k] = np.delete(v, li_index_2remove, 0)
+    rr = {}
+    for k,v in r.items():
+        if k=='masks':
+            #TODO: faster! nearly 5 second when we need to remvoe a mask!!
+            #small example on how to remove a mask (i.e. entries in third dimension based on a list of index)
+            #l = np.array([[[1,9,45],[22,7,54],[3,5,43]],[[2,33,3],[6,333,34],[3,45,5]],[[0,6,66],[2,65,87],[4,68,123]]])
+            #np.array([[np.delete(np.array(j), [1,0], 0) for j in x] for x in l])
+            rr[k] = np.array([[np.delete(j, li_index_2remove, 0) for j in x] for x in v])
+            continue
+        else:
+            rr[k] = np.delete(v, li_index_2remove, 0)
     
-        return(rr)
+    return(rr)
+ 
 
+########## 2
+def reunited_tuple(e):
+    r = e.copy()
+    for i,j in combinations(range(len(e)), 2):
+        if set(e[i]) & set(e[j]):
+            #print(i,j)
+            del r[max(i,j)]
+            del r[min(j,i)]
+            r.append(tuple(set(e[i]+e[j])))
+            #print(r)
+            return(reunited_tuple(r))
+    return(r)
+#small example
+#reunited_tuple([(0,2),(0,1),(3,4),(5,10),(3,1)])
+
+def NMS_class(r):
+    li_t_ioumask = []
+    li_m = [r['masks'][:,:,i] for i in range(len(r['masks'][0][0]))]
+    for i, m1 in enumerate(li_m):
+        for j in range(i+1,len(li_m)):
+            m2 = li_m[j]
+            intersection = np.logical_and(m1, m2)
+            union = np.logical_or(m1, m2)
+            IoU = np.sum(intersection) / np.sum(union)
+            #print(IoU)
+            if IoU>0.8:
+                li_t_ioumask.append((i,j))
+    li_t_ioumask = reunited_tuple(li_t_ioumask)
+    li_index2remove = []
+    for t in li_t_ioumask:
+        l = [(i,r['scores'][i]) for i in t]
+        #print(l)
+        m = max(l, key=lambda x:x[1])[0] #index that we will keep (remove all the rest even if more than 1)
+        li_index2remove.extend([i for i in t if i!=m])
+    return(li_index2remove)
+
+
+def dropbadmresults(r, li_index_2remove):
+    #return the results without the info of the index to remove
+    if len(li_index_2remove)==0:
+        return(r)
+    rr = {}
+    for k,v in r.items():
+        if k=='masks':
+            #TODO: faster! nearly 5 second when we need to remvoe a mask!!
+            #small example on how to remove a mask (i.e. entries in third dimension based on a list of index)
+            #l = np.array([[[1,9,45],[22,7,54],[3,5,43]],[[2,33,3],[6,333,34],[3,45,5]],[[0,6,66],[2,65,87],[4,68,123]]])
+            #np.array([[np.delete(np.array(j), [1,0], 0) for j in x] for x in l])
+            rr[k] = np.array([[np.delete(j, li_index_2remove, 0) for j in x] for x in v])
+            continue
+        else:
+            rr[k] = np.delete(v, li_index_2remove, 0)
+    return(rr)    
+    
+    
+    
+    
+    
     
 #take an image and return the image without reflect
 def data_augmentation_remove_reflect(img):
@@ -1680,6 +1742,15 @@ def random_colors(N, bright=True):
     #convert from 0-1 to 0-255 integers
     colors = [ (int(i[0]*255), int(i[1]*255), int(i[2]*255)) for i in colors]
     return(colors    )
+    
+#get n color not random but most different color https://www.quora.com/How-do-I-generate-n-visually-distinct-RGB-colours-in-Python
+def get_spaced_colors(n):
+    max_value = 16581375 #255**3
+    interval = int(max_value / n)
+    colors = [hex(I)[2:].zfill(6) for I in range(0, max_value, interval)]
+    
+    return [(int(i[:2], 16), int(i[2:4], 16), int(i[4:], 16)) for i in colors]    
+    
     
 #join several dico together without duplicate info but with all possible info
 def join_dico(li_s):
@@ -2742,7 +2813,7 @@ def apply_mask(image, mask, color=(0,170,0), alpha=0.5):
     
 #take an image with the associated dico_id_bbox and annotate (label, bbox, line) the image with one color per label and save it
 #to add more details: https://docs.opencv.org/3.1.0/dc/da5/tutorial_py_drawing_functions.html
-def label_image(dico_id_bboxes_mask, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color, has_bbox, has_label, has_line, has_masks, alpha):
+def label_image_tracking(dico_id_bboxes_mask, image, li_text, X_LINE, FRAME_HEIGHT, dico_id_color, has_bbox, has_label, has_line, has_masks, alpha):
         
     #define font for text and nbr of color we have
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -2770,8 +2841,31 @@ def label_image(dico_id_bboxes_mask, image, li_text, X_LINE, FRAME_HEIGHT, dico_
         for (x,y,s) in li_text:
             cv2.putText(image, s, (x,y), font, 1, (139, 0, 0), 1, cv2.LINE_AA)
     
-    #return
     return(image)
+
+
+
+#take an image with the associated mask (li_t_bboxes_mask) and species, and annotate mask with species depending on the species id
+def label_image_species(image, li_t_bboxes_mask, li_species, has_species_label, dico_species_color, has_bbox=False, has_masks=True, alpha=0.5):
+        
+    #define font for text and nbr of color we have
+    font = cv2.FONT_HERSHEY_SIMPLEX
+       
+    #draw rectangles with label, masks and associated color
+    for i, id_ in enumerate(li_species):
+        bbox, mask = li_t_bboxes_mask[i]
+        x,y,w,h = bbox
+        thickness = 3
+        color = dico_species_color[id_]
+        if has_bbox:
+            cv2.rectangle(image, (x,y), (x+w,y+h), color, thickness)
+        if has_species_label:
+            cv2.putText(image, str(id_), (x,y), font, 1, color, thickness, cv2.LINE_AA)
+        if has_masks:
+             image = apply_mask(image, mask, color, alpha)
+   
+    return(image)
+    
     
 ###################################################################################################
 ########################################### basic models ##########################################
