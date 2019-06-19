@@ -1221,28 +1221,18 @@ def NMS_class(r):
         #print(l)
         m = max(l, key=lambda x:x[1])[0] #index that we will keep (remove all the rest even if more than 1)
         li_index2remove.extend([i for i in t if i!=m])
-    return(li_index2remove)
-
+    return(li_index2remove)  
 
 def dropbadmresults(r, li_index_2remove):
     #return the results without the info of the index to remove
     if len(li_index_2remove)==0:
         return(r)
     rr = {}
-    for k,v in r.items():
-        if k=='masks':
-            #TODO: faster! nearly 5 second when we need to remvoe a mask!!
-            #small example on how to remove a mask (i.e. entries in third dimension based on a list of index)
-            #l = np.array([[[1,9,45],[22,7,54],[3,5,43]],[[2,33,3],[6,333,34],[3,45,5]],[[0,6,66],[2,65,87],[4,68,123]]])
-            #np.array([[np.delete(np.array(j), [1,0], 0) for j in x] for x in l])
-            rr[k] = np.array([[np.delete(j, li_index_2remove, 0) for j in x] for x in v])
-            continue
-        else:
-            rr[k] = np.delete(v, li_index_2remove, 0)
-    return(rr)    
-    
-    
-    
+    rr['masks'] = np.array(r['masks'][:,:,np.array([x for x in range(len(r['scores'])) if x not in li_index_2remove])])
+    rr['class_ids'] = np.delete(r['class_ids'], li_index_2remove, 0)
+    rr['rois'] = np.delete(r['rois'], li_index_2remove, 0)
+    rr['scores'] = np.delete(r['scores'], li_index_2remove, 0)
+    return(rr)            
     
     
     
@@ -2755,6 +2745,10 @@ def update_results(results, dico0_id_side, dico_id_bboxes_mask, X_LINE):
 def simple_bbox_tracker(dico0_id_bboxes_mask, li_t_bboxes_mask, max_used_id, smaller_dist=100):
     
     #TODO: if two new objects has the same id
+    
+    #if only one object before and now, then augment the smaller_dist
+    if len(dico0_id_bboxes_mask)==1 & len(li_t_bboxes_mask)==1:
+        smaller_dist = smaller_dist+25
         
     #if no old object return the new object with new ids
     if len(dico0_id_bboxes_mask)==0:
